@@ -14,9 +14,20 @@ class XuiClient:
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or Settings()
+        api_token = self._api_token
+        headers = (
+            {
+                "Authorization": f"Bearer {api_token}",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            }
+            if api_token
+            else None
+        )
         self._client = httpx.AsyncClient(
             base_url=self.settings.xui_base_url.rstrip("/"),
             follow_redirects=True,
+            headers=headers,
         )
         self._authenticated = False
 
@@ -133,6 +144,11 @@ class XuiClient:
 
     async def _request(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
         """Perform an authenticated request, retrying once after auth failures."""
+        if self._api_token:
+            response = await self._client.request(method, url, **kwargs)
+            response.raise_for_status()
+            return self._json(response)
+
         if not self._authenticated:
             await self.login()
 
@@ -144,6 +160,13 @@ class XuiClient:
 
         response.raise_for_status()
         return self._json(response)
+
+    @property
+    def _api_token(self) -> str:
+        """Return the configured API token, if token-based auth is enabled."""
+        if self.settings.xui_api_token is None:
+            return ""
+        return self.settings.xui_api_token.get_secret_value()
 
     @staticmethod
     def _single_client(client_data: dict[str, Any]) -> dict[str, Any]:
