@@ -66,6 +66,7 @@ class VpnService:
         client_payload = {
             "id": client_id,
             "email": email,
+            "tgId": telegram_id,
             "expiryTime": int(expires_at.timestamp() * 1000),
             "limitIp": self.settings.xui_default_limit_ip,
             "totalGB": total_bytes,

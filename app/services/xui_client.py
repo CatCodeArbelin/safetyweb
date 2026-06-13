@@ -31,6 +31,8 @@ class XuiClientCreate(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
+    tgId: int | str
+
 
 class XuiAddClientRequest(BaseModel):
     """Request payload for adding a client to one or more inbounds."""
