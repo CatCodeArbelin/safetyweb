@@ -77,8 +77,8 @@ class VpnService:
         primary_inbound_id = inbound_ids[0]
 
         xui_response = await self.xui_client.add_client(
+            client_payload,
             inbound_ids,
-            {"clients": [client_payload]},
         )
         subscription_link = self._extract_subscription_link(xui_response)
         connection_link = subscription_link or self._build_vless_uri(client_id, email)

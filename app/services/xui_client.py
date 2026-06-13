@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
+from pydantic import BaseModel, ConfigDict
 
 from app.config import Settings
 
@@ -23,6 +24,19 @@ class XuiRequestError(XuiError):
 
 class XuiApiError(XuiError):
     """Raised when X-UI returns an unsuccessful API response."""
+
+
+class XuiClientCreate(BaseModel):
+    """Client payload accepted by the X-UI clients API."""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class XuiAddClientRequest(BaseModel):
+    """Request payload for adding a client to one or more inbounds."""
+
+    client: XuiClientCreate
+    inboundIds: list[int]
 
 
 class XuiClient:
@@ -78,15 +92,36 @@ class XuiClient:
 
     async def add_client(
         self,
+        client: XuiClientCreate | dict[str, Any],
+        inbound_ids: list[int],
+    ) -> dict[str, Any]:
+        """Add a client to one or more inbounds using the clients API."""
+        client_model = (
+            client
+            if isinstance(client, XuiClientCreate)
+            else XuiClientCreate.model_validate(client)
+        )
+        payload = XuiAddClientRequest(
+            client=client_model,
+            inboundIds=inbound_ids,
+        ).model_dump()
+        return await self._request("POST", "/panel/api/clients/add", json=payload)
+
+    async def add_client_legacy(
+        self,
         inbound_id: int | list[int] | None,
         client_data: dict[str, Any],
     ) -> dict[str, Any]:
-        """Add a client to the configured inbound."""
+        """Add a client using the legacy inbound addClient API."""
         payload = {
-            "client": self._single_client(client_data),
-            "inboundIds": self._inbound_ids(inbound_id),
+            "id": self._inbound_ids(inbound_id)[0],
+            "settings": json.dumps({"clients": [self._single_client(client_data)]}),
         }
-        return await self._request("POST", "/panel/api/clients/add", json=payload)
+        return await self._request(
+            "POST",
+            "/panel/api/inbounds/addClient",
+            json=payload,
+        )
 
     async def update_client(
         self,
