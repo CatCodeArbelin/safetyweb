@@ -278,6 +278,7 @@ class VpnService:
         network = stream_settings.get("network")
         security = stream_settings.get("security")
         params = {
+            "encryption": "none",
             "type": network if isinstance(network, str) and network else "tcp",
             "security": security if isinstance(security, str) and security else "none",
         }
