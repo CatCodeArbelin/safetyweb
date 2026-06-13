@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     xui_password: SecretStr
     xui_inbound_ids: Annotated[list[int], NoDecode]
     xui_expired_client_policy: str = "disable"
+    xui_default_traffic_gb: int = 0
+    xui_default_limit_ip: int = 1
     test_mode: bool = False
     admin_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
 
