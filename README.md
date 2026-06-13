@@ -35,6 +35,7 @@ POSTGRES_PASSWORD=replace-me
 
 # 3x-ui panel connection settings.
 XUI_BASE_URL=https://xui.example.com
+XUI_PUBLIC_HOST=dotaautochess.site
 XUI_USERNAME=replace-me
 XUI_PASSWORD=replace-me
 XUI_INBOUND_IDS=1
@@ -53,6 +54,7 @@ TEST_MODE=false
 3x-ui запускается и администрируется отдельно: compose-файл проекта поднимает только бота, PostgreSQL и Redis. Для интеграции с уже установленной панелью 3x-ui обязательно заполните:
 
 - `XUI_BASE_URL` — базовый URL панели 3x-ui, например `https://xui.example.com`.
+- `XUI_PUBLIC_HOST` — публичный домен или IP сервера, который будет подставляться в VLESS-ссылку, например `dotaautochess.site`.
 - `XUI_USERNAME` — имя пользователя администратора 3x-ui.
 - `XUI_PASSWORD` — пароль администратора 3x-ui.
 - `XUI_INBOUND_IDS` — ID inbound через запятую, в которые бот будет добавлять VPN-клиентов.

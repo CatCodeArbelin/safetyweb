@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     postgres_password: SecretStr
     redis_url: str = "redis://localhost:6379/0"
     xui_base_url: str = "http://localhost:2053"
+    xui_public_host: str
     xui_api_token: SecretStr | None = None
     xui_username: str
     xui_password: SecretStr
