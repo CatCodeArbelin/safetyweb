@@ -173,7 +173,10 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
     user_id = int(user_id_raw)
     months = int(months_raw)
     vpn_service = VpnService(settings=settings)
-    vpn_link = await vpn_service.create_client(telegram_id=user_id, months=months)
+    try:
+        vpn_link = await vpn_service.create_client(telegram_id=user_id, months=months)
+    finally:
+        await vpn_service.close()
 
     await callback.bot.send_message(
         user_id,
