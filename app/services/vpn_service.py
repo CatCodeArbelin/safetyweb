@@ -89,7 +89,6 @@ class VpnService:
         provisioned_client_id = self._extract_client_secret(provisioned_client, email)
         inbound = self._extract_inbound_object(inbound_response)
         protocol = inbound.get("protocol")
-        port = inbound.get("port")
         settings = self._extract_inbound_settings(inbound_response)
         stream_settings = self._extract_inbound_stream_settings(inbound_response)
         subscription_link = self._extract_subscription_link(xui_response)
@@ -100,8 +99,7 @@ class VpnService:
             email=email,
             inbound=inbound,
             protocol=protocol,
-            port=port,
-            settings=settings,
+            app_settings=self.settings,
             stream_settings=stream_settings,
         )
 
@@ -117,7 +115,7 @@ class VpnService:
                 "provisioned_client": provisioned_client,
                 "inbound": {
                     "protocol": protocol,
-                    "port": port,
+                    "port": inbound.get("port"),
                     "settings": settings,
                     "streamSettings": stream_settings,
                 },
@@ -238,8 +236,7 @@ class VpnService:
         email: str,
         inbound: dict[str, Any],
         protocol: Any,
-        port: Any,
-        settings: dict[str, Any],
+        app_settings: Settings,
         stream_settings: dict[str, Any],
     ) -> str:
         """Build a VLESS URI from inbound data when X-UI has no ready link."""
@@ -250,14 +247,8 @@ class VpnService:
             )
             raise RuntimeError(msg)
 
-        address = cls._extract_vless_address(inbound, settings, stream_settings)
-        if not address:
-            msg = (
-                "X-UI provisioning failed: ready subscription link is absent and "
-                "inbound response does not contain a public VLESS address/listen host"
-            )
-            raise RuntimeError(msg)
-
+        address = app_settings.xui_public_host
+        port = inbound.get("port")
         if port in (None, ""):
             msg = (
                 "X-UI provisioning failed: ready subscription link is absent and "
@@ -270,38 +261,6 @@ class VpnService:
             f"vless://{client_secret}@{address}:{port}?"
             f"{urlencode(params, doseq=True)}#{quote(email)}"
         )
-
-    @staticmethod
-    def _extract_vless_address(
-        inbound: dict[str, Any],
-        settings: dict[str, Any],
-        stream_settings: dict[str, Any],
-    ) -> str | None:
-        """Return the best public address available in the inbound payload."""
-        candidates = [
-            inbound.get("listen"),
-            inbound.get("address"),
-            settings.get("address"),
-            stream_settings.get("address"),
-        ]
-
-        reality_settings = stream_settings.get("realitySettings")
-        if isinstance(reality_settings, dict):
-            server_names = reality_settings.get("serverNames")
-            if isinstance(server_names, list):
-                candidates.extend(server_names)
-
-        tls_settings = stream_settings.get("tlsSettings")
-        if isinstance(tls_settings, dict):
-            candidates.append(tls_settings.get("serverName"))
-
-        for candidate in candidates:
-            if not isinstance(candidate, str):
-                continue
-            normalized = candidate.strip()
-            if normalized and normalized not in {"0.0.0.0", "::", "[::]"}:
-                return normalized
-        return None
 
     @staticmethod
     def _vless_query_params(stream_settings: dict[str, Any]) -> dict[str, str]:
