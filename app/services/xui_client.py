@@ -79,6 +79,10 @@ class XuiClient:
         self._authenticated = True
         return data
 
+    async def get_openapi(self) -> dict[str, Any]:
+        """Return the panel OpenAPI schema for healthcheck/debug diagnostics."""
+        return await self._request("GET", "/panel/api/openapi.json")
+
     async def get_inbounds(self) -> dict[str, Any]:
         """Return all configured inbounds."""
         return await self._request("GET", "/panel/api/inbounds/list")
