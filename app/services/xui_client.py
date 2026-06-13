@@ -18,6 +18,7 @@ class XuiClient:
             base_url=self.settings.xui_base_url.rstrip("/"),
             follow_redirects=True,
         )
+        self._authenticated = False
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""
@@ -33,7 +34,9 @@ class XuiClient:
             },
         )
         response.raise_for_status()
-        return self._json(response)
+        data = self._json(response)
+        self._authenticated = True
+        return data
 
     async def get_inbounds(self) -> dict[str, Any]:
         """Return all configured inbounds."""
@@ -53,10 +56,10 @@ class XuiClient:
     ) -> dict[str, Any]:
         """Add a client to the configured inbound."""
         payload = {
-            "id": self._inbound_id(inbound_id),
-            "settings": json.dumps(client_data),
+            "client": self._single_client(client_data),
+            "inboundIds": [self._inbound_id(inbound_id)],
         }
-        return await self._request("POST", "/panel/api/inbounds/addClient", json=payload)
+        return await self._request("POST", "/panel/api/clients/add", json=payload)
 
     async def update_client(
         self,
@@ -130,13 +133,31 @@ class XuiClient:
 
     async def _request(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
         """Perform an authenticated request, retrying once after auth failures."""
+        if not self._authenticated:
+            await self.login()
+
         response = await self._client.request(method, url, **kwargs)
         if response.status_code in {401, 403}:
+            self._authenticated = False
             await self.login()
             response = await self._client.request(method, url, **kwargs)
 
         response.raise_for_status()
         return self._json(response)
+
+    @staticmethod
+    def _single_client(client_data: dict[str, Any]) -> dict[str, Any]:
+        """Return the single client object required by the panel clients API."""
+        clients = client_data.get("clients")
+        if (
+            isinstance(clients, list)
+            and len(clients) == 1
+            and isinstance(clients[0], dict)
+        ):
+            return clients[0]
+
+        msg = "X-UI client payload must contain exactly one client"
+        raise ValueError(msg)
 
     def _inbound_id(self, inbound_id: int | None = None) -> int:
         """Return the environment-configured inbound id, ignoring external values."""
