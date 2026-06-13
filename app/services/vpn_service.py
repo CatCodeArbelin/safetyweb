@@ -1,5 +1,6 @@
 """VPN provisioning service."""
 
+import json
 from calendar import monthrange
 from datetime import UTC, datetime
 from secrets import token_hex
@@ -80,19 +81,27 @@ class VpnService:
             client_payload,
             inbound_ids,
         )
+        inbound_response = await self.xui_client.get_inbound(primary_inbound_id)
+        provisioned_client = self._find_inbound_client(inbound_response, email)
+        provisioned_client_id = self._extract_client_secret(provisioned_client, email)
         subscription_link = self._extract_subscription_link(xui_response)
-        connection_link = subscription_link or self._build_vless_uri(client_id, email)
+        connection_link = subscription_link or self._build_vless_uri(
+            provisioned_client_id,
+            email,
+        )
 
         await SubscriptionRepository(session).create_active(
             user=user,
-            xui_client_id=client_id,
+            xui_client_id=provisioned_client_id,
             xui_email=email,
             inbound_id=primary_inbound_id,
             expires_at=expires_at,
             traffic_limit_gb=0,
             vpn_config={
                 "client": client_payload,
+                "provisioned_client": provisioned_client,
                 "xui_response": xui_response,
+                "inbound_response": inbound_response,
                 "subscription_link": subscription_link,
                 "connection_link": connection_link,
             },
@@ -123,6 +132,70 @@ class VpnService:
             elif isinstance(current, list):
                 stack.extend(current)
         return None
+
+    @classmethod
+    def _find_inbound_client(
+        cls,
+        inbound_response: dict[str, Any],
+        generated_email: str,
+    ) -> dict[str, Any]:
+        """Return the newly provisioned client from an X-UI inbound response."""
+        settings = cls._extract_inbound_settings(inbound_response)
+        clients = settings.get("clients")
+        if not isinstance(clients, list):
+            msg = "X-UI provisioning failed: inbound settings do not contain clients list"
+            raise RuntimeError(msg)
+
+        for client in clients:
+            if isinstance(client, dict) and client.get("email") == generated_email:
+                return client
+
+        msg = (
+            "X-UI provisioning failed: created client was not found in primary "
+            f"inbound by email {generated_email!r}"
+        )
+        raise RuntimeError(msg)
+
+    @classmethod
+    def _extract_inbound_settings(cls, inbound_response: dict[str, Any]) -> dict[str, Any]:
+        """Extract and decode the inbound settings object from an X-UI response."""
+        inbound = cls._extract_inbound_object(inbound_response)
+        settings = inbound.get("settings")
+        if isinstance(settings, str):
+            try:
+                settings = json.loads(settings)
+            except json.JSONDecodeError as exc:
+                msg = "X-UI provisioning failed: inbound settings is not valid JSON"
+                raise RuntimeError(msg) from exc
+
+        if isinstance(settings, dict):
+            return settings
+
+        msg = "X-UI provisioning failed: inbound response does not contain settings"
+        raise RuntimeError(msg)
+
+    @staticmethod
+    def _extract_inbound_object(inbound_response: dict[str, Any]) -> dict[str, Any]:
+        """Extract the inbound object from common X-UI response wrappers."""
+        for key in ("obj", "data", "inbound"):
+            value = inbound_response.get(key)
+            if isinstance(value, dict):
+                return value
+        return inbound_response
+
+    @staticmethod
+    def _extract_client_secret(client: dict[str, Any], generated_email: str) -> str:
+        """Extract the persisted X-UI client UUID/secret from a client object."""
+        for key in ("id", "password"):
+            value = client.get(key)
+            if isinstance(value, str) and value:
+                return value
+
+        msg = (
+            "X-UI provisioning failed: created client "
+            f"{generated_email!r} has neither id nor password"
+        )
+        raise RuntimeError(msg)
 
     def _build_vless_uri(self, client_id: str, email: str) -> str:
         """Build a fallback VLESS URI when X-UI does not return a subscription link."""
