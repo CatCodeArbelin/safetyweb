@@ -1,13 +1,13 @@
 """VPN provisioning service."""
 
 import json
-from calendar import monthrange
 from datetime import UTC, datetime
 from secrets import token_hex
 from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from dateutil.relativedelta import relativedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
@@ -61,13 +61,14 @@ class VpnService:
         user = await UserRepository(session).get_or_create(telegram_id)
         client_id = str(uuid4())
         email = f"tg_{telegram_id}_{token_hex(4)}"
-        expires_at = self._add_months(datetime.now(tz=UTC), months)
+        expires_at = datetime.now(UTC) + relativedelta(months=months)
+        expiry_ms = int(expires_at.timestamp() * 1000)
         total_bytes = self.settings.xui_default_traffic_gb * 1024 ** 3
         client_payload = {
             "id": client_id,
             "email": email,
             "tgId": telegram_id,
-            "expiryTime": int(expires_at.timestamp() * 1000),
+            "expiryTime": expiry_ms,
             "limitIp": self.settings.xui_default_limit_ip,
             "totalGB": total_bytes,
             "enable": True,
@@ -109,15 +110,6 @@ class VpnService:
             },
         )
         return connection_link
-
-    @staticmethod
-    def _add_months(value: datetime, months: int) -> datetime:
-        """Add calendar months while preserving the day where possible."""
-        month_index = value.month - 1 + months
-        year = value.year + month_index // 12
-        month = month_index % 12 + 1
-        day = min(value.day, monthrange(year, month)[1])
-        return value.replace(year=year, month=month, day=day)
 
     @staticmethod
     def _extract_subscription_link(response: dict[str, Any]) -> str | None:
