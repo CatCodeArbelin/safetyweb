@@ -9,6 +9,22 @@ import httpx
 from app.config import Settings
 
 
+class XuiError(Exception):
+    """Base exception for X-UI client errors."""
+
+
+class XuiAuthError(XuiError):
+    """Raised when X-UI authentication fails."""
+
+
+class XuiRequestError(XuiError):
+    """Raised when an X-UI HTTP request fails."""
+
+
+class XuiApiError(XuiError):
+    """Raised when X-UI returns an unsuccessful API response."""
+
+
 class XuiClient:
     """Asynchronous X-UI API client with cookie-based authentication."""
 
@@ -44,7 +60,7 @@ class XuiClient:
                 "password": self.settings.xui_password.get_secret_value(),
             },
         )
-        response.raise_for_status()
+        self._raise_for_status(response)
         data = self._json(response)
         self._authenticated = True
         return data
@@ -146,7 +162,7 @@ class XuiClient:
         """Perform an authenticated request, retrying once after auth failures."""
         if self._api_token:
             response = await self._client.request(method, url, **kwargs)
-            response.raise_for_status()
+            self._raise_for_status(response)
             return self._json(response)
 
         if not self._authenticated:
@@ -158,7 +174,7 @@ class XuiClient:
             await self.login()
             response = await self._client.request(method, url, **kwargs)
 
-        response.raise_for_status()
+        self._raise_for_status(response)
         return self._json(response)
 
     @property
@@ -191,12 +207,57 @@ class XuiClient:
         """Encode a value for safe use in an URL path segment."""
         return quote(value, safe="")
 
-    @staticmethod
-    def _json(response: httpx.Response) -> dict[str, Any]:
-        """Decode an X-UI JSON response."""
-        data = response.json()
-        if isinstance(data, dict):
-            return data
+    @classmethod
+    def _raise_for_status(cls, response: httpx.Response) -> None:
+        """Raise X-UI specific exceptions for failed HTTP responses."""
+        status_code = response.status_code
+        if status_code in {401, 403}:
+            raise XuiAuthError(
+                f"X-UI authentication failed (status={status_code}, "
+                f"response={cls._response_text(response)})",
+            )
+        if status_code == 404:
+            raise XuiRequestError(
+                "Wrong endpoint or wrong XUI_BASE_URL web path "
+                f"(status={status_code}, response={cls._response_text(response)})",
+            )
+        if 500 <= status_code <= 599:
+            raise XuiRequestError(
+                "3x-ui panel server error "
+                f"(status={status_code}, response={cls._response_text(response)})",
+            )
+        if 400 <= status_code <= 599:
+            raise XuiRequestError(
+                f"X-UI request failed (status={status_code}, "
+                f"response={cls._response_text(response)})",
+            )
 
-        msg = "X-UI response must be a JSON object"
-        raise ValueError(msg)
+    @classmethod
+    def _json(cls, response: httpx.Response) -> dict[str, Any]:
+        """Decode an X-UI JSON response and validate the API success flag."""
+        data = response.json()
+        if not isinstance(data, dict):
+            msg = (
+                "X-UI response must be a JSON object "
+                f"(status={response.status_code}, "
+                f"response={cls._response_text(response)})"
+            )
+            raise XuiApiError(msg)
+
+        if data.get("success") is False:
+            api_message = data.get("msg") or data.get("message") or data
+            raise XuiApiError(
+                f"X-UI API error: {api_message} "
+                f"(status={response.status_code}, "
+                f"response={cls._response_text(response)})",
+            )
+
+        return data
+
+    @staticmethod
+    def _response_text(response: httpx.Response) -> str:
+        """Return response text for diagnostics without raising httpx exceptions."""
+        try:
+            return response.text
+        except UnicodeDecodeError:
+            return repr(response.content)
