@@ -14,6 +14,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -30,6 +31,15 @@ class SubscriptionStatus(StrEnum):
     ACTIVE = "active"
     EXPIRED = "expired"
     DISABLED = "disabled"
+
+
+class SubscriptionNotificationType(StrEnum):
+    """Subscription notification event types."""
+
+    EXPIRES_IN_3_DAYS = "expires_in_3_days"
+    EXPIRES_IN_1_DAY = "expires_in_1_day"
+    EXPIRES_TODAY = "expires_today"
+    EXPIRED = "expired"
 
 
 class PaymentStatus(StrEnum):
@@ -133,6 +143,41 @@ class Subscription(Base):
     user: Mapped[User] = relationship(back_populates="subscriptions")
     vpn_node: Mapped[VpnNode | None] = relationship(back_populates="subscriptions")
     payments: Mapped[list["Payment"]] = relationship(back_populates="subscription")
+    notifications: Mapped[list["SubscriptionNotification"]] = relationship(
+        back_populates="subscription", cascade="all, delete-orphan"
+    )
+
+
+class SubscriptionNotification(Base):
+    """Notification event emitted for a subscription."""
+
+    __tablename__ = "subscription_notifications"
+
+    __table_args__ = (
+        CheckConstraint(
+            "notification_type IN "
+            "('expires_in_3_days', 'expires_in_1_day', 'expires_today', 'expired')",
+            name="ck_subscription_notifications_type",
+        ),
+        UniqueConstraint(
+            "subscription_id",
+            "notification_type",
+            name="uq_subscription_notifications_once",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subscription_id: Mapped[int] = mapped_column(
+        ForeignKey("subscriptions.id", ondelete="CASCADE"), nullable=False
+    )
+    notification_type: Mapped[SubscriptionNotificationType] = mapped_column(
+        String(64), nullable=False
+    )
+    sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    subscription: Mapped[Subscription] = relationship(back_populates="notifications")
 
 
 class Payment(Base):

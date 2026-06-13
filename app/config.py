@@ -27,7 +27,18 @@ class Settings(BaseSettings):
     xui_username: str
     xui_password: SecretStr
     xui_inbound_id: int
+    xui_expired_client_policy: str = "disable"
     admin_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
+
+    @field_validator("xui_expired_client_policy")
+    @classmethod
+    def validate_xui_expired_client_policy(cls, value: str) -> str:
+        """Validate how expired X-UI clients are deprovisioned."""
+        normalized = value.lower()
+        if normalized not in {"disable", "delete"}:
+            msg = "XUI_EXPIRED_CLIENT_POLICY must be either 'disable' or 'delete'"
+            raise ValueError(msg)
+        return normalized
 
     @field_validator("admin_ids", mode="before")
     @classmethod
