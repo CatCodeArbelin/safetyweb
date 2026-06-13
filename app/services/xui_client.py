@@ -167,11 +167,11 @@ class XuiClient:
         return data
 
     async def delete_client(self, inbound_id: int | None, client_id: str) -> dict[str, Any]:
-        """Delete a client from the configured inbound."""
+        """Delete a client using the legacy inbound-specific delClient API."""
         return await self._request(
             "POST",
-            f"/panel/api/inbounds/delClient/"
-            f"{self._inbound_id(inbound_id)}/{self._path_param(client_id)}",
+            f"/panel/api/inbounds/{self._inbound_id(inbound_id)}/delClient/"
+            f"{self._path_param(client_id)}",
         )
 
     async def reset_client_traffic(
