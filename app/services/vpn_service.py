@@ -93,17 +93,21 @@ class VpnService:
         protocol = inbound.get("protocol")
         settings = self._extract_inbound_settings(inbound_response)
         stream_settings = self._extract_inbound_stream_settings(inbound_response)
-        subscription_link = self._extract_subscription_link(xui_response)
-        if subscription_link is None:
-            subscription_link = self._extract_subscription_link(inbound_response)
-        connection_link = subscription_link or self._build_vless_uri(
-            client_secret=provisioned_client_id,
-            email=email,
-            inbound=inbound,
-            protocol=protocol,
-            app_settings=self.settings,
-            stream_settings=stream_settings,
-        )
+        diagnostic_subscription_link = self._extract_subscription_link(xui_response)
+        if diagnostic_subscription_link is None:
+            diagnostic_subscription_link = self._extract_subscription_link(inbound_response)
+
+        if self.settings.xui_sub_base_url:
+            connection_link = f"{self.settings.xui_sub_base_url.rstrip('/')}/{sub_id}"
+        else:
+            connection_link = self._build_vless_uri(
+                client_secret=provisioned_client_id,
+                email=email,
+                inbound=inbound,
+                protocol=protocol,
+                app_settings=self.settings,
+                stream_settings=stream_settings,
+            )
 
         await SubscriptionRepository(session).create_active(
             user=user,
@@ -123,7 +127,7 @@ class VpnService:
                 },
                 "xui_response": xui_response,
                 "inbound_response": inbound_response,
-                "subscription_link": subscription_link,
+                "diagnostic_subscription_link": diagnostic_subscription_link,
                 "connection_link": connection_link,
             },
         )
