@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     xui_password: SecretStr
     xui_inbound_id: int
     xui_expired_client_policy: str = "disable"
+    test_mode: bool = False
     admin_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
 
     @field_validator("xui_expired_client_policy")

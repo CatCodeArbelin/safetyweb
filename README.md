@@ -41,9 +41,12 @@ XUI_INBOUND_ID=1
 
 # Comma-separated Telegram user IDs with administrator permissions.
 ADMIN_IDS=123456789,987654321
+
+# Free test mode: users receive VPN keys without payment/admin confirmation.
+TEST_MODE=false
 ```
 
-Дополнительно можно переопределить `POSTGRES_HOST`, `POSTGRES_PORT`, `REDIS_URL` и `XUI_EXPIRED_CLIENT_POLICY`. В Docker Compose значения `POSTGRES_HOST`, `POSTGRES_PORT` и `REDIS_URL` для контейнера бота задаются автоматически и указывают на сервисы `postgres` и `redis`.
+Дополнительно можно переопределить `POSTGRES_HOST`, `POSTGRES_PORT`, `REDIS_URL`, `XUI_EXPIRED_CLIENT_POLICY` и `TEST_MODE`. В Docker Compose значения `POSTGRES_HOST`, `POSTGRES_PORT` и `REDIS_URL` для контейнера бота задаются автоматически и указывают на сервисы `postgres` и `redis`.
 
 ### Обязательные настройки 3x-ui
 
@@ -117,6 +120,16 @@ alembic upgrade head
 6. Бот переводит платёж в статус `paid`, создаёт клиента во внешнем 3x-ui inbound и отправляет пользователю VPN-ссылку.
 
 Тарифные суммы в MVP сейчас заданы в коде как `0 RUB`; перед боевым использованием их нужно заменить на реальные значения и согласовать с будущим платёжным провайдером.
+
+## Тестовый режим без оплаты
+
+Для проверки регистрации пользователей и выдачи VPN-ключей без Robokassa или ручного подтверждения включите переменную окружения:
+
+```env
+TEST_MODE=true
+```
+
+В тестовом режиме пользователь выбирает тариф и нажимает «Получить тестовый ключ». Бот не создаёт заявку на оплату, не уведомляет администраторов и сразу создаёт пользователя/подписку в базе, добавляет клиента в 3x-ui и отправляет VPN-ссылку пользователю. Для возврата к обычному ручному MVP-сценарию установите `TEST_MODE=false` или удалите переменную.
 
 
 ## Соответствие MVP техническому заданию
