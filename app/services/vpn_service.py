@@ -258,6 +258,10 @@ class VpnService:
             raise RuntimeError(msg)
 
         address = app_settings.xui_public_host
+        if not address:
+            msg = "XUI_PUBLIC_HOST is required for manual VLESS URI generation"
+            raise RuntimeError(msg)
+
         port = inbound.get("port")
         if port in (None, ""):
             msg = (
