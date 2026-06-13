@@ -98,7 +98,7 @@ class VpnService:
             diagnostic_subscription_link = self._extract_subscription_link(inbound_response)
 
         if self.settings.xui_sub_base_url:
-            connection_link = f"{self.settings.xui_sub_base_url.rstrip('/')}/{sub_id}"
+            connection_link = f"{self.settings.xui_sub_base_url.rstrip('/')}/sub/{sub_id}"
         else:
             connection_link = self._build_vless_uri(
                 client_secret=provisioned_client_id,
@@ -117,6 +117,11 @@ class VpnService:
             expires_at=expires_at,
             traffic_limit_gb=self.settings.xui_default_traffic_gb,
             vpn_config={
+                "email": email,
+                "subId": sub_id,
+                "subscription_url": connection_link,
+                "inboundIds": inbound_ids,
+                "xui_response": xui_response,
                 "client": client_payload,
                 "provisioned_client": provisioned_client,
                 "inbound": {
@@ -125,7 +130,6 @@ class VpnService:
                     "settings": settings,
                     "streamSettings": stream_settings,
                 },
-                "xui_response": xui_response,
                 "inbound_response": inbound_response,
                 "diagnostic_subscription_link": diagnostic_subscription_link,
                 "connection_link": connection_link,
