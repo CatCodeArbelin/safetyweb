@@ -62,12 +62,13 @@ class VpnService:
         client_id = str(uuid4())
         email = f"tg_{telegram_id}_{token_hex(4)}"
         expires_at = self._add_months(datetime.now(tz=UTC), months)
+        total_bytes = self.settings.xui_default_traffic_gb * 1024 ** 3
         client_payload = {
             "id": client_id,
             "email": email,
             "expiryTime": int(expires_at.timestamp() * 1000),
-            "limitIp": 0,
-            "totalGB": 0,
+            "limitIp": self.settings.xui_default_limit_ip,
+            "totalGB": total_bytes,
             "enable": True,
         }
 
@@ -96,7 +97,7 @@ class VpnService:
             xui_email=email,
             inbound_id=primary_inbound_id,
             expires_at=expires_at,
-            traffic_limit_gb=0,
+            traffic_limit_gb=self.settings.xui_default_traffic_gb,
             vpn_config={
                 "client": client_payload,
                 "provisioned_client": provisioned_client,
