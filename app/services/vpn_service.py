@@ -4,7 +4,7 @@ import json
 from datetime import UTC, datetime
 from secrets import token_hex
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlencode
 from uuid import uuid4
 
 from dateutil.relativedelta import relativedelta
@@ -87,10 +87,22 @@ class VpnService:
         inbound_response = await self.xui_client.get_inbound(primary_inbound_id)
         provisioned_client = self._find_inbound_client(inbound_response, email)
         provisioned_client_id = self._extract_client_secret(provisioned_client, email)
+        inbound = self._extract_inbound_object(inbound_response)
+        protocol = inbound.get("protocol")
+        port = inbound.get("port")
+        settings = self._extract_inbound_settings(inbound_response)
+        stream_settings = self._extract_inbound_stream_settings(inbound_response)
         subscription_link = self._extract_subscription_link(xui_response)
+        if subscription_link is None:
+            subscription_link = self._extract_subscription_link(inbound_response)
         connection_link = subscription_link or self._build_vless_uri(
-            provisioned_client_id,
-            email,
+            client_secret=provisioned_client_id,
+            email=email,
+            inbound=inbound,
+            protocol=protocol,
+            port=port,
+            settings=settings,
+            stream_settings=stream_settings,
         )
 
         await SubscriptionRepository(session).create_active(
@@ -103,6 +115,12 @@ class VpnService:
             vpn_config={
                 "client": client_payload,
                 "provisioned_client": provisioned_client,
+                "inbound": {
+                    "protocol": protocol,
+                    "port": port,
+                    "settings": settings,
+                    "streamSettings": stream_settings,
+                },
                 "xui_response": xui_response,
                 "inbound_response": inbound_response,
                 "subscription_link": subscription_link,
@@ -191,11 +209,149 @@ class VpnService:
         )
         raise RuntimeError(msg)
 
-    def _build_vless_uri(self, client_id: str, email: str) -> str:
-        """Build a fallback VLESS URI when X-UI does not return a subscription link."""
-        parsed_url = urlparse(self.settings.xui_base_url)
-        host = parsed_url.hostname or (
-            self.settings.xui_base_url.removeprefix("https://").removeprefix("http://")
+    @classmethod
+    def _extract_inbound_stream_settings(
+        cls,
+        inbound_response: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Extract and decode the inbound streamSettings object from X-UI."""
+        inbound = cls._extract_inbound_object(inbound_response)
+        stream_settings = inbound.get("streamSettings")
+        if isinstance(stream_settings, str):
+            try:
+                stream_settings = json.loads(stream_settings)
+            except json.JSONDecodeError as exc:
+                msg = "X-UI provisioning failed: inbound streamSettings is not valid JSON"
+                raise RuntimeError(msg) from exc
+
+        if isinstance(stream_settings, dict):
+            return stream_settings
+
+        msg = "X-UI provisioning failed: inbound response does not contain streamSettings"
+        raise RuntimeError(msg)
+
+    @classmethod
+    def _build_vless_uri(
+        cls,
+        *,
+        client_secret: str,
+        email: str,
+        inbound: dict[str, Any],
+        protocol: Any,
+        port: Any,
+        settings: dict[str, Any],
+        stream_settings: dict[str, Any],
+    ) -> str:
+        """Build a VLESS URI from inbound data when X-UI has no ready link."""
+        if protocol != "vless":
+            msg = (
+                "X-UI provisioning failed: ready subscription link is absent and "
+                f"primary inbound protocol is {protocol!r}, not 'vless'"
+            )
+            raise RuntimeError(msg)
+
+        address = cls._extract_vless_address(inbound, settings, stream_settings)
+        if not address:
+            msg = (
+                "X-UI provisioning failed: ready subscription link is absent and "
+                "inbound response does not contain a public VLESS address/listen host"
+            )
+            raise RuntimeError(msg)
+
+        if port in (None, ""):
+            msg = (
+                "X-UI provisioning failed: ready subscription link is absent and "
+                "inbound response does not contain a VLESS port"
+            )
+            raise RuntimeError(msg)
+
+        params = cls._vless_query_params(stream_settings)
+        return (
+            f"vless://{client_secret}@{address}:{port}?"
+            f"{urlencode(params, doseq=True)}#{quote(email)}"
         )
-        port = parsed_url.port or (443 if parsed_url.scheme == "https" else 80)
-        return f"vless://{client_id}@{host}:{port}?type=tcp&security=none#{email}"
+
+    @staticmethod
+    def _extract_vless_address(
+        inbound: dict[str, Any],
+        settings: dict[str, Any],
+        stream_settings: dict[str, Any],
+    ) -> str | None:
+        """Return the best public address available in the inbound payload."""
+        candidates = [
+            inbound.get("listen"),
+            inbound.get("address"),
+            settings.get("address"),
+            stream_settings.get("address"),
+        ]
+
+        reality_settings = stream_settings.get("realitySettings")
+        if isinstance(reality_settings, dict):
+            server_names = reality_settings.get("serverNames")
+            if isinstance(server_names, list):
+                candidates.extend(server_names)
+
+        tls_settings = stream_settings.get("tlsSettings")
+        if isinstance(tls_settings, dict):
+            candidates.append(tls_settings.get("serverName"))
+
+        for candidate in candidates:
+            if not isinstance(candidate, str):
+                continue
+            normalized = candidate.strip()
+            if normalized and normalized not in {"0.0.0.0", "::", "[::]"}:
+                return normalized
+        return None
+
+    @staticmethod
+    def _vless_query_params(stream_settings: dict[str, Any]) -> dict[str, str]:
+        """Translate Xray stream settings into VLESS URI query parameters."""
+        network = stream_settings.get("network")
+        security = stream_settings.get("security")
+        params = {
+            "type": network if isinstance(network, str) and network else "tcp",
+            "security": security if isinstance(security, str) and security else "none",
+        }
+
+        reality_settings = stream_settings.get("realitySettings")
+        if isinstance(reality_settings, dict):
+            public_key = reality_settings.get("publicKey")
+            if isinstance(public_key, str) and public_key:
+                params["pbk"] = public_key
+            short_ids = reality_settings.get("shortIds")
+            if isinstance(short_ids, list) and short_ids and isinstance(short_ids[0], str):
+                params["sid"] = short_ids[0]
+            server_names = reality_settings.get("serverNames")
+            if (
+                isinstance(server_names, list)
+                and server_names
+                and isinstance(server_names[0], str)
+            ):
+                params["sni"] = server_names[0]
+            settings = reality_settings.get("settings")
+            if isinstance(settings, dict):
+                fingerprint = settings.get("fingerprint")
+                if isinstance(fingerprint, str) and fingerprint:
+                    params["fp"] = fingerprint
+                spider_x = settings.get("spiderX")
+                if isinstance(spider_x, str) and spider_x:
+                    params["spx"] = spider_x
+
+        tls_settings = stream_settings.get("tlsSettings")
+        if isinstance(tls_settings, dict):
+            server_name = tls_settings.get("serverName")
+            if isinstance(server_name, str) and server_name:
+                params["sni"] = server_name
+
+        ws_settings = stream_settings.get("wsSettings")
+        if isinstance(ws_settings, dict):
+            path = ws_settings.get("path")
+            if isinstance(path, str) and path:
+                params["path"] = path
+            headers = ws_settings.get("headers")
+            if isinstance(headers, dict):
+                host = headers.get("Host")
+                if isinstance(host, str) and host:
+                    params["host"] = host
+
+        return params
