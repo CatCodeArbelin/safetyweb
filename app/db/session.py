@@ -8,8 +8,12 @@ from app.config import Settings
 
 
 settings = Settings()
-engine = create_async_engine(settings.database_url)
-async_session_maker = async_sessionmaker(engine, expire_on_commit=False)
+engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+async_session_maker = async_sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:
