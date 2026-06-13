@@ -13,6 +13,7 @@ dependencies = [
     "redis",
     "httpx",
     "pydantic-settings",
+    "python-dateutil",
     "apscheduler",
 ]
 
