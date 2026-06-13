@@ -37,7 +37,7 @@ POSTGRES_PASSWORD=replace-me
 XUI_BASE_URL=https://xui.example.com
 XUI_USERNAME=replace-me
 XUI_PASSWORD=replace-me
-XUI_INBOUND_ID=1
+XUI_INBOUND_IDS=1
 
 # Comma-separated Telegram user IDs with administrator permissions.
 ADMIN_IDS=123456789,987654321
@@ -55,7 +55,7 @@ TEST_MODE=false
 - `XUI_BASE_URL` — базовый URL панели 3x-ui, например `https://xui.example.com`.
 - `XUI_USERNAME` — имя пользователя администратора 3x-ui.
 - `XUI_PASSWORD` — пароль администратора 3x-ui.
-- `XUI_INBOUND_ID` — ID inbound, в который бот будет добавлять VPN-клиентов.
+- `XUI_INBOUND_IDS` — ID inbound через запятую, в которые бот будет добавлять VPN-клиентов.
 
 ## Запуск через Docker Compose
 

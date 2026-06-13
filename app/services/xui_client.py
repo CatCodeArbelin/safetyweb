@@ -78,13 +78,13 @@ class XuiClient:
 
     async def add_client(
         self,
-        inbound_id: int | None,
+        inbound_id: int | list[int] | None,
         client_data: dict[str, Any],
     ) -> dict[str, Any]:
         """Add a client to the configured inbound."""
         payload = {
             "client": self._single_client(client_data),
-            "inboundIds": [self._inbound_id(inbound_id)],
+            "inboundIds": self._inbound_ids(inbound_id),
         }
         return await self._request("POST", "/panel/api/clients/add", json=payload)
 
@@ -198,9 +198,30 @@ class XuiClient:
         msg = "X-UI client payload must contain exactly one client"
         raise ValueError(msg)
 
+    def _inbound_ids(self, inbound_id: int | list[int] | None = None) -> list[int]:
+        """Return inbound ids from an explicit value or environment settings."""
+        if inbound_id is None:
+            inbound_ids = self.settings.xui_inbound_ids
+        elif isinstance(inbound_id, list):
+            inbound_ids = inbound_id
+        else:
+            inbound_ids = [inbound_id]
+
+        if not inbound_ids:
+            msg = "XUI_INBOUND_IDS must contain at least one inbound id"
+            raise ValueError(msg)
+        return inbound_ids
+
     def _inbound_id(self, inbound_id: int | None = None) -> int:
-        """Return the environment-configured inbound id, ignoring external values."""
-        return self.settings.xui_inbound_id
+        """Return an explicit inbound id or the first configured inbound id."""
+        if inbound_id is not None:
+            return inbound_id
+
+        inbound_ids = self.settings.xui_inbound_ids
+        if not inbound_ids:
+            msg = "XUI_INBOUND_IDS must contain at least one inbound id"
+            raise ValueError(msg)
+        return inbound_ids[0]
 
     @staticmethod
     def _path_param(value: str) -> str:
