@@ -1,6 +1,7 @@
 """VPN provisioning service."""
 
 import json
+import logging
 from datetime import UTC, datetime
 from secrets import token_hex
 from typing import Any
@@ -14,6 +15,9 @@ from app.config import Settings
 from app.db.repositories import SubscriptionRepository, UserRepository
 from app.db.session import async_session_maker
 from app.services.xui_client import XuiClient
+
+
+logger = logging.getLogger(__name__)
 
 
 class VpnService:
@@ -64,7 +68,7 @@ class VpnService:
         email = sub_id
         expires_at = datetime.now(UTC) + relativedelta(months=months)
         expiry_ms = int(expires_at.timestamp() * 1000)
-        total_bytes = self.settings.xui_default_traffic_gb * 1024 ** 3
+        total_bytes = self.settings.xui_default_traffic_gb * 1024**3
         client_payload = {
             "id": client_id,
             "email": email,
@@ -86,20 +90,35 @@ class VpnService:
             client_payload,
             inbound_ids,
         )
-        inbound_response = await self.xui_client.get_inbound(primary_inbound_id)
-        provisioned_client = self._find_inbound_client(inbound_response, email)
-        provisioned_client_id = self._extract_client_secret(provisioned_client, email)
-        inbound = self._extract_inbound_object(inbound_response)
-        protocol = inbound.get("protocol")
-        settings = self._extract_inbound_settings(inbound_response)
-        stream_settings = self._extract_inbound_stream_settings(inbound_response)
+
+        provisioned_client = client_payload
+        provisioned_client_id = client_id
+        inbound_response: dict[str, Any] | None = None
+        inbound: dict[str, Any] = {}
+        protocol: Any = None
+        settings: dict[str, Any] = {}
+        stream_settings: dict[str, Any] = {}
         diagnostic_subscription_link = self._extract_subscription_link(xui_response)
-        if diagnostic_subscription_link is None:
-            diagnostic_subscription_link = self._extract_subscription_link(inbound_response)
 
         if self.settings.xui_sub_base_url:
-            connection_link = f"{self.settings.xui_sub_base_url.rstrip('/')}/sub/{sub_id}"
+            connection_link = self._build_subscription_url(
+                self.settings.xui_sub_base_url,
+                sub_id,
+            )
         else:
+            inbound_response = await self.xui_client.get_inbound(primary_inbound_id)
+            provisioned_client = self._find_inbound_client(inbound_response, email)
+            provisioned_client_id = self._extract_client_secret(
+                provisioned_client, email
+            )
+            inbound = self._extract_inbound_object(inbound_response)
+            protocol = inbound.get("protocol")
+            settings = self._extract_inbound_settings(inbound_response)
+            stream_settings = self._extract_inbound_stream_settings(inbound_response)
+            if diagnostic_subscription_link is None:
+                diagnostic_subscription_link = self._extract_subscription_link(
+                    inbound_response
+                )
             connection_link = self._build_vless_uri(
                 client_secret=provisioned_client_id,
                 email=email,
@@ -108,6 +127,16 @@ class VpnService:
                 app_settings=self.settings,
                 stream_settings=stream_settings,
             )
+
+        logger.debug(
+            "Prepared X-UI connection link",
+            extra={
+                "xui_sub_base_url": self.settings.xui_sub_base_url,
+                "sub_id": sub_id,
+                "inbound_ids": inbound_ids,
+                "connection_link": connection_link,
+            },
+        )
 
         await SubscriptionRepository(session).create_active(
             user=user,
@@ -138,9 +167,19 @@ class VpnService:
         return connection_link
 
     @staticmethod
+    def _build_subscription_url(base_url: str, sub_id: str) -> str:
+        """Build a 3x-ui subscription URL as subURI + URL-encoded subId."""
+        return base_url.rstrip("/") + "/" + quote(sub_id, safe="")
+
+    @staticmethod
     def _extract_subscription_link(response: dict[str, Any]) -> str | None:
         """Find a subscription link in a known 3x-ui response shape."""
-        candidate_keys = {"subscriptionLink", "subscription_link", "subLink", "sub_link"}
+        candidate_keys = {
+            "subscriptionLink",
+            "subscription_link",
+            "subLink",
+            "sub_link",
+        }
         stack: list[Any] = [response]
         while stack:
             current = stack.pop()
@@ -163,7 +202,9 @@ class VpnService:
         settings = cls._extract_inbound_settings(inbound_response)
         clients = settings.get("clients")
         if not isinstance(clients, list):
-            msg = "X-UI provisioning failed: inbound settings do not contain clients list"
+            msg = (
+                "X-UI provisioning failed: inbound settings do not contain clients list"
+            )
             raise RuntimeError(msg)
 
         for client in clients:
@@ -177,7 +218,9 @@ class VpnService:
         raise RuntimeError(msg)
 
     @classmethod
-    def _extract_inbound_settings(cls, inbound_response: dict[str, Any]) -> dict[str, Any]:
+    def _extract_inbound_settings(
+        cls, inbound_response: dict[str, Any]
+    ) -> dict[str, Any]:
         """Extract and decode the inbound settings object from an X-UI response."""
         inbound = cls._extract_inbound_object(inbound_response)
         settings = inbound.get("settings")
@@ -229,13 +272,17 @@ class VpnService:
             try:
                 stream_settings = json.loads(stream_settings)
             except json.JSONDecodeError as exc:
-                msg = "X-UI provisioning failed: inbound streamSettings is not valid JSON"
+                msg = (
+                    "X-UI provisioning failed: inbound streamSettings is not valid JSON"
+                )
                 raise RuntimeError(msg) from exc
 
         if isinstance(stream_settings, dict):
             return stream_settings
 
-        msg = "X-UI provisioning failed: inbound response does not contain streamSettings"
+        msg = (
+            "X-UI provisioning failed: inbound response does not contain streamSettings"
+        )
         raise RuntimeError(msg)
 
     @classmethod
@@ -293,7 +340,11 @@ class VpnService:
             if isinstance(public_key, str) and public_key:
                 params["pbk"] = public_key
             short_ids = reality_settings.get("shortIds")
-            if isinstance(short_ids, list) and short_ids and isinstance(short_ids[0], str):
+            if (
+                isinstance(short_ids, list)
+                and short_ids
+                and isinstance(short_ids[0], str)
+            ):
                 params["sid"] = short_ids[0]
             server_names = reality_settings.get("serverNames")
             if (
