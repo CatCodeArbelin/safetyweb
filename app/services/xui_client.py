@@ -1,5 +1,6 @@
 """HTTP client for the X-UI panel."""
 
+import json
 from typing import Any
 from urllib.parse import quote
 
@@ -51,7 +52,10 @@ class XuiClient:
         client_data: dict[str, Any],
     ) -> dict[str, Any]:
         """Add a client to the configured inbound."""
-        payload = {"id": self._inbound_id(inbound_id), "settings": client_data}
+        payload = {
+            "id": self._inbound_id(inbound_id),
+            "settings": json.dumps(client_data),
+        }
         return await self._request("POST", "/panel/api/inbounds/addClient", json=payload)
 
     async def update_client(
@@ -65,7 +69,10 @@ class XuiClient:
         """Update a client in the configured inbound."""
         if enable is not None:
             client_data = self._with_client_enable(client_data, client_id, enable)
-        payload = {"id": self._inbound_id(inbound_id), "settings": client_data}
+        payload = {
+            "id": self._inbound_id(inbound_id),
+            "settings": json.dumps(client_data),
+        }
         return await self._request(
             "POST",
             f"/panel/api/inbounds/updateClient/{self._path_param(client_id)}",
