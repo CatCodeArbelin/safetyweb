@@ -179,11 +179,11 @@ class XuiClient:
         inbound_id: int | None,
         client_email: str,
     ) -> dict[str, Any]:
-        """Reset traffic statistics for a client in the configured inbound."""
+        """Legacy helper to reset client traffic outside the main creation flow."""
         return await self._request(
             "POST",
-            "/panel/api/inbounds/resetClientTraffic/"
-            f"{self._inbound_id(inbound_id)}/{self._path_param(client_email)}",
+            f"/panel/api/inbounds/{self._inbound_id(inbound_id)}/resetClientTraffic/"
+            f"{self._path_param(client_email)}",
         )
 
     async def get_client_traffic(self, client_email: str) -> dict[str, Any]:
