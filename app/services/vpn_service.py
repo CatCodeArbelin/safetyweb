@@ -60,13 +60,15 @@ class VpnService:
 
         user = await UserRepository(session).get_or_create(telegram_id)
         client_id = str(uuid4())
-        email = f"tg_{telegram_id}_{token_hex(4)}"
+        sub_id = f"tg_{telegram_id}_{token_hex(4)}"
+        email = sub_id
         expires_at = datetime.now(UTC) + relativedelta(months=months)
         expiry_ms = int(expires_at.timestamp() * 1000)
         total_bytes = self.settings.xui_default_traffic_gb * 1024 ** 3
         client_payload = {
             "id": client_id,
             "email": email,
+            "subId": sub_id,
             "tgId": telegram_id,
             "expiryTime": expiry_ms,
             "limitIp": self.settings.xui_default_limit_ip,
