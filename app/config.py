@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     xui_api_token: SecretStr | None = None
     xui_username: str
     xui_password: SecretStr
-    xui_inbound_id: int
+    xui_inbound_ids: Annotated[list[int], NoDecode]
     xui_expired_client_policy: str = "disable"
     test_mode: bool = False
     admin_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
@@ -42,10 +42,27 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         return normalized
 
+    @field_validator("xui_inbound_ids", mode="before")
+    @classmethod
+    def parse_xui_inbound_ids(
+        cls,
+        value: str | list[int] | list[str] | None,
+    ) -> list[int]:
+        """Parse XUI_INBOUND_IDS from a comma-separated string or a list."""
+        return cls._parse_int_list(value, "XUI_INBOUND_IDS")
+
     @field_validator("admin_ids", mode="before")
     @classmethod
     def parse_admin_ids(cls, value: str | list[int] | list[str] | None) -> list[int]:
         """Parse ADMIN_IDS from a comma-separated string or a list."""
+        return cls._parse_int_list(value, "ADMIN_IDS")
+
+    @staticmethod
+    def _parse_int_list(
+        value: str | list[int] | list[str] | None,
+        env_name: str,
+    ) -> list[int]:
+        """Parse comma-separated strings or lists into a list of integers."""
         if value is None or value == "":
             return []
 
@@ -55,7 +72,7 @@ class Settings(BaseSettings):
         if isinstance(value, list):
             return [int(item) for item in value]
 
-        msg = "ADMIN_IDS must be a comma-separated string or a list of integers"
+        msg = f"{env_name} must be a comma-separated string or a list of integers"
         raise TypeError(msg)
 
     @property

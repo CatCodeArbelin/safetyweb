@@ -70,8 +70,14 @@ class VpnService:
             "enable": True,
         }
 
+        inbound_ids = self.settings.xui_inbound_ids
+        if not inbound_ids:
+            msg = "XUI_INBOUND_IDS must contain at least one inbound id"
+            raise ValueError(msg)
+        primary_inbound_id = inbound_ids[0]
+
         xui_response = await self.xui_client.add_client(
-            self.settings.xui_inbound_id,
+            inbound_ids,
             {"clients": [client_payload]},
         )
         subscription_link = self._extract_subscription_link(xui_response)
@@ -81,7 +87,7 @@ class VpnService:
             user=user,
             xui_client_id=client_id,
             xui_email=email,
-            inbound_id=self.settings.xui_inbound_id,
+            inbound_id=primary_inbound_id,
             expires_at=expires_at,
             traffic_limit_gb=0,
             vpn_config={
