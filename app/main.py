@@ -71,13 +71,14 @@ def tariff_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def payment_request_keyboard(months: int) -> InlineKeyboardMarkup:
-    """Build inline keyboard for submitting a manual payment request."""
+def payment_request_keyboard(months: int, test_mode: bool = False) -> InlineKeyboardMarkup:
+    """Build inline keyboard for submitting a payment or test access request."""
+    button_text = "Получить тестовый ключ" if test_mode else "Создать заявку на оплату"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Создать заявку на оплату",
+                    text=button_text,
                     callback_data=f"pay_request:{months}",
                 )
             ]
@@ -119,7 +120,9 @@ async def show_tariffs(message: Message, state: FSMContext) -> None:
 @router.callback_query(
     F.data.startswith("buy:"), StateFilter(PurchaseState.choosing_tariff)
 )
-async def choose_tariff(callback: CallbackQuery, state: FSMContext) -> None:
+async def choose_tariff(
+    callback: CallbackQuery, state: FSMContext, settings: Settings
+) -> None:
     """Persist chosen tariff and offer manual payment request creation."""
     months = int(callback.data.split(":", maxsplit=1)[1]) if callback.data else 0
     if months not in TARIFFS:
@@ -128,10 +131,15 @@ async def choose_tariff(callback: CallbackQuery, state: FSMContext) -> None:
 
     await state.update_data(months=months)
     await state.set_state(PurchaseState.waiting_payment)
+    payment_hint = (
+        "Тестовый режим включён: оплата не потребуется."
+        if settings.test_mode
+        else "Нажмите кнопку ниже, чтобы создать заявку на ручную оплату."
+    )
     await callback.message.answer(
         f"Вы выбрали тариф: <b>{TARIFFS[months]}</b>.\n"
-        "Нажмите кнопку ниже, чтобы создать заявку на ручную оплату.",
-        reply_markup=payment_request_keyboard(months),
+        f"{payment_hint}",
+        reply_markup=payment_request_keyboard(months, test_mode=settings.test_mode),
     )
     await callback.answer()
 
@@ -149,6 +157,23 @@ async def create_payment_request(
         return
 
     user = callback.from_user
+    if settings.test_mode:
+        vpn_service = VpnService(settings=settings)
+        try:
+            vpn_link = await vpn_service.create_client(telegram_id=user.id, months=months)
+        finally:
+            await vpn_service.close()
+
+        await state.clear()
+        await callback.message.answer(
+            "Тестовый режим включён ✅\n\n"
+            f"Ваша VPN-ссылка на тариф <b>{TARIFFS[months]}</b>:\n"
+            f"<code>{escape(vpn_link)}</code>",
+            reply_markup=main_menu_keyboard(),
+        )
+        await callback.answer("Тестовый ключ выдан")
+        return
+
     payment_service = PaymentService()
     payment = await payment_service.create_payment(
         user_id=user.id,
@@ -174,6 +199,7 @@ async def create_payment_request(
             reply_markup=confirm_payment_keyboard(payment.provider_payment_id or "", months),
         )
 
+    await state.clear()
     await callback.message.answer(
         "Заявка создана. После проверки оплаты администратор подтвердит её, "
         "и бот отправит вам VPN-ссылку.",
