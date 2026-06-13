@@ -52,7 +52,7 @@ class XuiClient:
     ) -> dict[str, Any]:
         """Add a client to the configured inbound."""
         payload = {"id": self._inbound_id(inbound_id), "settings": client_data}
-        return await self._request("POST", "/panel/api/clients/add", json=payload)
+        return await self._request("POST", "/panel/api/inbounds/addClient", json=payload)
 
     async def update_client(
         self,
