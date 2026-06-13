@@ -23,6 +23,7 @@ from app.config import Settings
 from app.services.payment_service import PaymentService
 from app.services.subscription_service import SubscriptionService
 from app.services.vpn_service import VpnService
+from app.services.xui_client import XuiClient, XuiError
 from app.tasks.scheduler import create_scheduler
 
 TARIFFS = {
@@ -259,7 +260,35 @@ async def admin_menu(message: Message, settings: Settings) -> None:
         "Админ-меню MVP:\n"
         "• заявки приходят администраторам автоматически;\n"
         "• подтверждение оплаты — кнопкой «Подтвердить оплату» в заявке;\n"
-        "• состояние 3x-ui проверяется через создание клиента при подтверждении."
+        "• проверка 3x-ui без создания клиента — командой «XUI debug»."
+    )
+
+
+@router.message(F.text.casefold() == "xui debug")
+async def xui_debug(message: Message, settings: Settings) -> None:
+    """Check X-UI OpenAPI availability without changing provisioning state."""
+    if message.from_user is None or message.from_user.id not in settings.admin_ids:
+        await message.answer("Недостаточно прав.")
+        return
+
+    xui_client = XuiClient(settings=settings)
+    try:
+        schema = await xui_client.get_openapi()
+    except XuiError as error:
+        await message.answer(f"3x-ui debug: ошибка ❌\n<code>{escape(str(error))}</code>")
+        return
+    finally:
+        await xui_client.close()
+
+    title = schema.get("info", {}).get("title", "OpenAPI")
+    version = schema.get("info", {}).get("version", "unknown")
+    paths = schema.get("paths", {})
+    paths_count = len(paths) if isinstance(paths, dict) else 0
+    await message.answer(
+        "3x-ui debug: OpenAPI доступен ✅\n"
+        f"Схема: <b>{escape(str(title))}</b>\n"
+        f"Версия: <code>{escape(str(version))}</code>\n"
+        f"Paths: <code>{paths_count}</code>"
     )
 
 
