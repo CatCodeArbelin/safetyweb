@@ -21,6 +21,7 @@ from aiogram.types import (
 
 from app.config import Settings
 from app.services.payment_service import PaymentService
+from app.tasks.scheduler import create_scheduler
 from app.services.vpn_service import VpnService
 
 TARIFFS = {
@@ -243,8 +244,13 @@ async def main() -> None:
     )
     dispatcher = Dispatcher(storage=storage)
     dispatcher.include_router(router)
+    scheduler = create_scheduler(bot=bot, settings=settings)
+    scheduler.start()
 
-    await dispatcher.start_polling(bot, settings=settings)
+    try:
+        await dispatcher.start_polling(bot, settings=settings)
+    finally:
+        scheduler.shutdown(wait=False)
 
 
 if __name__ == "__main__":

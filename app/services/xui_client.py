@@ -59,14 +59,40 @@ class XuiClient:
         inbound_id: int | None,
         client_id: str,
         client_data: dict[str, Any],
+        *,
+        enable: bool | None = None,
     ) -> dict[str, Any]:
         """Update a client in the configured inbound."""
+        if enable is not None:
+            client_data = self._with_client_enable(client_data, client_id, enable)
         payload = {"id": self._inbound_id(inbound_id), "settings": client_data}
         return await self._request(
             "POST",
             f"/panel/api/inbounds/updateClient/{self._path_param(client_id)}",
             json=payload,
         )
+
+    @staticmethod
+    def _with_client_enable(
+        client_data: dict[str, Any],
+        client_id: str,
+        enable: bool,
+    ) -> dict[str, Any]:
+        """Return X-UI client settings with the requested enable flag applied."""
+        data = dict(client_data)
+        clients = data.get("clients")
+        if isinstance(clients, list) and clients:
+            updated_clients = []
+            for client in clients:
+                updated_client = dict(client) if isinstance(client, dict) else client
+                if isinstance(updated_client, dict):
+                    updated_client.setdefault("id", client_id)
+                    updated_client["enable"] = enable
+                updated_clients.append(updated_client)
+            data["clients"] = updated_clients
+        else:
+            data["clients"] = [{"id": client_id, "enable": enable}]
+        return data
 
     async def delete_client(self, inbound_id: int | None, client_id: str) -> dict[str, Any]:
         """Delete a client from the configured inbound."""
