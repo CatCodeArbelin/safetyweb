@@ -20,6 +20,7 @@ from aiogram.types import (
 )
 
 from app.config import Settings
+from app.services.payment_service import PaymentService
 from app.services.vpn_service import VpnService
 
 TARIFFS = {
@@ -27,6 +28,14 @@ TARIFFS = {
     3: "3 месяца",
     6: "6 месяцев",
 }
+
+TARIFF_PRICES = {
+    1: 0,
+    3: 0,
+    6: 0,
+}
+
+PAYMENT_CURRENCY = "RUB"
 
 router = Router(name="safetyweb")
 
@@ -74,14 +83,14 @@ def payment_request_keyboard(months: int) -> InlineKeyboardMarkup:
     )
 
 
-def confirm_payment_keyboard(user_id: int, months: int) -> InlineKeyboardMarkup:
+def confirm_payment_keyboard(provider_payment_id: str, months: int) -> InlineKeyboardMarkup:
     """Build admin confirmation keyboard for a manual payment request."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="Подтвердить оплату",
-                    callback_data=f"confirm:{user_id}:{months}",
+                    callback_data=f"confirm:{provider_payment_id}:{months}",
                 )
             ]
         ]
@@ -138,20 +147,29 @@ async def create_payment_request(
         return
 
     user = callback.from_user
-    await state.update_data(months=months)
+    payment_service = PaymentService()
+    payment = await payment_service.create_payment(
+        user_id=user.id,
+        tariff_id=months,
+        amount=TARIFF_PRICES[months],
+        currency=PAYMENT_CURRENCY,
+    )
+    await state.update_data(months=months, payment_id=payment.provider_payment_id)
     admin_text = (
         "Новая заявка на ручную оплату\n\n"
         f"Пользователь: <a href=\"tg://user?id={user.id}\">{escape(user.full_name)}</a>\n"
         f"Telegram ID: <code>{user.id}</code>\n"
         f"Username: @{escape(user.username) if user.username else '—'}\n"
-        f"Тариф: <b>{TARIFFS[months]}</b>"
+        f"Тариф: <b>{TARIFFS[months]}</b>\n"
+        f"Платёж: <code>{payment.provider_payment_id}</code>\n"
+        f"Сумма: <code>{payment.amount} {payment.currency}</code>"
     )
 
     for admin_id in settings.admin_ids:
         await bot.send_message(
             admin_id,
             admin_text,
-            reply_markup=confirm_payment_keyboard(user.id, months),
+            reply_markup=confirm_payment_keyboard(payment.provider_payment_id or "", months),
         )
 
     await callback.message.answer(
@@ -169,9 +187,11 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
         await callback.answer("Недостаточно прав", show_alert=True)
         return
 
-    _, user_id_raw, months_raw = (callback.data or "").split(":", maxsplit=2)
-    user_id = int(user_id_raw)
+    _, provider_payment_id, months_raw = (callback.data or "").split(":", maxsplit=2)
     months = int(months_raw)
+    payment_service = PaymentService()
+    payment = await payment_service.confirm_manual_payment(provider_payment_id)
+    user_id = payment.user.telegram_id
     vpn_service = VpnService(settings=settings)
     try:
         vpn_link = await vpn_service.create_client(telegram_id=user_id, months=months)
