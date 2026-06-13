@@ -307,12 +307,6 @@ class VpnService:
                 if isinstance(spider_x, str) and spider_x:
                     params["spx"] = spider_x
 
-        tls_settings = stream_settings.get("tlsSettings")
-        if isinstance(tls_settings, dict):
-            server_name = tls_settings.get("serverName")
-            if isinstance(server_name, str) and server_name:
-                params["sni"] = server_name
-
         ws_settings = stream_settings.get("wsSettings")
         if isinstance(ws_settings, dict):
             path = ws_settings.get("path")
