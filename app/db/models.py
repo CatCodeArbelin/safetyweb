@@ -85,20 +85,15 @@ class VpnNode(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    host: Mapped[str] = mapped_column(String(255), nullable=False)
-    location: Mapped[str | None] = mapped_column(String(255))
-    xui_inbound_id: Mapped[int | None] = mapped_column(Integer)
+    panel_url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    inbound_id: Mapped[int] = mapped_column(Integer, nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True, server_default="true", nullable=False)
-    max_clients: Mapped[int | None] = mapped_column(Integer)
-    current_clients: Mapped[int] = mapped_column(default=0, server_default="0", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
-
-    subscriptions: Mapped[list["Subscription"]] = relationship(back_populates="vpn_node")
 
 
 class Subscription(Base):
@@ -117,9 +112,6 @@ class Subscription(Base):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    vpn_node_id: Mapped[int | None] = mapped_column(
-        ForeignKey("vpn_nodes.id", ondelete="SET NULL")
-    )
     status: Mapped[SubscriptionStatus] = mapped_column(
         String(32),
         default=SubscriptionStatus.ACTIVE,
@@ -131,7 +123,12 @@ class Subscription(Base):
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    vpn_client_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    xui_client_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    xui_email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    inbound_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    traffic_limit_gb: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     vpn_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -141,7 +138,6 @@ class Subscription(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="subscriptions")
-    vpn_node: Mapped[VpnNode | None] = relationship(back_populates="subscriptions")
     payments: Mapped[list["Payment"]] = relationship(back_populates="subscription")
     notifications: Mapped[list["SubscriptionNotification"]] = relationship(
         back_populates="subscription", cascade="all, delete-orphan"

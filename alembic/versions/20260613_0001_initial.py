@@ -48,12 +48,9 @@ def upgrade() -> None:
         "vpn_nodes",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("name", sa.String(length=255), nullable=False),
-        sa.Column("host", sa.String(length=255), nullable=False),
-        sa.Column("location", sa.String(length=255), nullable=True),
-        sa.Column("xui_inbound_id", sa.Integer(), nullable=True),
+        sa.Column("panel_url", sa.String(length=2048), nullable=False),
+        sa.Column("inbound_id", sa.Integer(), nullable=False),
         sa.Column("is_active", sa.Boolean(), server_default="true", nullable=False),
-        sa.Column("max_clients", sa.Integer(), nullable=True),
-        sa.Column("current_clients", sa.Integer(), server_default="0", nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -73,7 +70,6 @@ def upgrade() -> None:
         "subscriptions",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("user_id", sa.Integer(), nullable=False),
-        sa.Column("vpn_node_id", sa.Integer(), nullable=True),
         sa.Column("status", sa.String(length=32), server_default="active", nullable=False),
         sa.Column(
             "started_at",
@@ -83,7 +79,10 @@ def upgrade() -> None:
         ),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("disabled_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("vpn_client_id", sa.String(length=255), nullable=True),
+        sa.Column("xui_client_id", sa.String(length=255), nullable=False),
+        sa.Column("xui_email", sa.String(length=255), nullable=False),
+        sa.Column("inbound_id", sa.Integer(), nullable=False),
+        sa.Column("traffic_limit_gb", sa.Integer(), server_default="0", nullable=False),
         sa.Column("vpn_config", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column(
             "created_at",
@@ -102,9 +101,9 @@ def upgrade() -> None:
             name="ck_subscriptions_status",
         ),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["vpn_node_id"], ["vpn_nodes.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("vpn_client_id"),
+        sa.UniqueConstraint("xui_client_id"),
+        sa.UniqueConstraint("xui_email"),
     )
 
     op.create_table(
