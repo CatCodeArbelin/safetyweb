@@ -85,9 +85,13 @@ class XuiClient:
         """Return the panel OpenAPI schema for healthcheck/debug diagnostics."""
         return await self._request("GET", "/panel/api/openapi.json")
 
-    async def get_inbounds(self) -> dict[str, Any]:
+    async def list_inbounds(self) -> dict[str, Any]:
         """Return all configured inbounds."""
         return await self._request("GET", "/panel/api/inbounds/list")
+
+    async def get_inbounds(self) -> dict[str, Any]:
+        """Alias for list_inbounds kept for backward compatibility."""
+        return await self.list_inbounds()
 
     async def get_inbound(self, inbound_id: int | None = None) -> dict[str, Any]:
         """Return a single inbound loaded from environment settings."""
