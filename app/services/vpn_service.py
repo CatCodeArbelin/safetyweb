@@ -7,11 +7,10 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.db.models import Subscription, SubscriptionStatus, User
+from app.db.repositories import SubscriptionRepository, UserRepository
 from app.db.session import async_session_maker
 from app.services.xui_client import XuiClient
 
@@ -58,7 +57,7 @@ class VpnService:
             msg = "Subscription tariff must be 1, 3, or 6 months"
             raise ValueError(msg)
 
-        user = await self._get_or_create_user(session, telegram_id)
+        user = await UserRepository(session).get_or_create(telegram_id)
         client_id = str(uuid4())
         email = f"tg_{telegram_id}_{token_hex(4)}"
         expires_at = self._add_months(datetime.now(tz=UTC), months)
@@ -78,34 +77,21 @@ class VpnService:
         subscription_link = self._extract_subscription_link(xui_response)
         connection_link = subscription_link or self._build_vless_uri(client_id, email)
 
-        session.add(
-            Subscription(
-                user=user,
-                status=SubscriptionStatus.ACTIVE,
-                expires_at=expires_at,
-                vpn_client_id=client_id,
-                vpn_config={
-                    "client": client_payload,
-                    "xui_response": xui_response,
-                    "subscription_link": subscription_link,
-                    "connection_link": connection_link,
-                },
-            )
+        await SubscriptionRepository(session).create_active(
+            user=user,
+            xui_client_id=client_id,
+            xui_email=email,
+            inbound_id=self.settings.xui_inbound_id,
+            expires_at=expires_at,
+            traffic_limit_gb=0,
+            vpn_config={
+                "client": client_payload,
+                "xui_response": xui_response,
+                "subscription_link": subscription_link,
+                "connection_link": connection_link,
+            },
         )
-        await session.flush()
         return connection_link
-
-    @staticmethod
-    async def _get_or_create_user(session: AsyncSession, telegram_id: int) -> User:
-        """Return an existing Telegram user or create a minimal user record."""
-        user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
-        if user is not None:
-            return user
-
-        user = User(telegram_id=telegram_id)
-        session.add(user)
-        await session.flush()
-        return user
 
     @staticmethod
     def _add_months(value: datetime, months: int) -> datetime:

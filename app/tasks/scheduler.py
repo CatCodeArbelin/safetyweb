@@ -117,7 +117,7 @@ async def _expired_active_subscriptions(
 ) -> list[Subscription]:
     result = await session.scalars(
         select(Subscription)
-        .options(selectinload(Subscription.user), selectinload(Subscription.vpn_node))
+        .options(selectinload(Subscription.user))
         .where(
             Subscription.status == SubscriptionStatus.ACTIVE,
             Subscription.expires_at <= now,
@@ -150,20 +150,17 @@ async def _deprovision_client(
     xui_client: XuiClient,
     settings: Settings,
 ) -> None:
-    if subscription.vpn_client_id is None:
-        return
-
-    inbound_id = subscription.vpn_node.xui_inbound_id if subscription.vpn_node else None
     if settings.xui_expired_client_policy == "delete":
-        await xui_client.delete_client(inbound_id, subscription.vpn_client_id)
+        await xui_client.delete_client(subscription.inbound_id, subscription.xui_client_id)
         return
 
     client_payload = dict((subscription.vpn_config or {}).get("client") or {})
-    client_payload["id"] = subscription.vpn_client_id
+    client_payload["id"] = subscription.xui_client_id
+    client_payload["email"] = subscription.xui_email
     client_payload["enable"] = False
     await xui_client.update_client(
-        inbound_id,
-        subscription.vpn_client_id,
+        subscription.inbound_id,
+        subscription.xui_client_id,
         {"clients": [client_payload]},
         enable=False,
     )

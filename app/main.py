@@ -21,8 +21,9 @@ from aiogram.types import (
 
 from app.config import Settings
 from app.services.payment_service import PaymentService
-from app.tasks.scheduler import create_scheduler
+from app.services.subscription_service import SubscriptionService
 from app.services.vpn_service import VpnService
+from app.tasks.scheduler import create_scheduler
 
 TARIFFS = {
     1: "1 месяц",
@@ -213,8 +214,27 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
 
 @router.message(F.text == "Моя подписка")
 async def my_subscription(message: Message) -> None:
-    """Show subscription placeholder."""
-    await message.answer("Данные о подписке появятся здесь после подтверждения оплаты.")
+    """Show current subscription status."""
+    if message.from_user is None:
+        await message.answer("Не удалось определить пользователя.")
+        return
+
+    subscription = await SubscriptionService().get_active_subscription(message.from_user.id)
+    await message.answer(SubscriptionService.format_status(subscription))
+
+
+@router.message(F.text == "Админ")
+async def admin_menu(message: Message, settings: Settings) -> None:
+    """Show MVP admin menu entry point."""
+    if message.from_user is None or message.from_user.id not in settings.admin_ids:
+        await message.answer("Недостаточно прав.")
+        return
+    await message.answer(
+        "Админ-меню MVP:\n"
+        "• заявки приходят администраторам автоматически;\n"
+        "• подтверждение оплаты — кнопкой «Подтвердить оплату» в заявке;\n"
+        "• состояние 3x-ui проверяется через создание клиента при подтверждении."
+    )
 
 
 @router.message(F.text == "Инструкция")
@@ -224,7 +244,8 @@ async def instruction(message: Message) -> None:
         "Инструкция:\n"
         "1. Оплатите выбранный тариф и дождитесь подтверждения.\n"
         "2. Скопируйте полученную VPN-ссылку.\n"
-        "3. Импортируйте ссылку в совместимое VPN-приложение."
+        "3. Установите Happ на Android или iOS.\n"
+        "4. Нажмите импорт из буфера обмена или вставьте ссылку вручную."
     )
 
 
