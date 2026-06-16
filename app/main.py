@@ -94,7 +94,12 @@ def docs_keyboard(settings: Settings) -> InlineKeyboardMarkup:
                     url=settings.terms_url,
                 )
             ],
-            [InlineKeyboardButton(text="Тарифы", callback_data="docs:tariffs")],
+            [
+                InlineKeyboardButton(
+                    text="Тарифы и условия оплаты",
+                    url=settings.tariffs_url,
+                )
+            ],
             [InlineKeyboardButton(text="Поддержка", callback_data="docs:support")],
         ]
     )
@@ -162,7 +167,10 @@ async def start(message: Message, state: FSMContext) -> None:
 @router.message(F.text == "Документы")
 async def show_documents(message: Message, settings: Settings) -> None:
     """Show legal documents and related quick actions."""
-    await message.answer("Документы и полезная информация:", reply_markup=docs_keyboard(settings))
+    await message.answer(
+        "Документы и полезная информация сервиса ЛадНет:",
+        reply_markup=docs_keyboard(settings),
+    )
 
 
 @router.callback_query(F.data == "docs:tariffs")
