@@ -97,10 +97,10 @@ def docs_keyboard(settings: Settings) -> InlineKeyboardMarkup:
 
 def support_contact_text(settings: Settings) -> str:
     """Format support contact information for bot messages."""
-    contacts = [escape(settings.support_username)]
+    lines = [f"Поддержка: {escape(settings.support_username)}"]
     if settings.support_email:
-        contacts.append(escape(settings.support_email))
-    return "Напишите в поддержку: " + ", ".join(contacts)
+        lines.append(f"Email: {escape(settings.support_email)}")
+    return "\n".join(lines)
 
 
 def format_tariffs() -> str:
