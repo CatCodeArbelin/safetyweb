@@ -41,6 +41,13 @@ TARIFF_PRICES = {
 
 PAYMENT_CURRENCY = "RUB"
 
+BTN_BUY_ACCESS = "🛒 Оформить доступ"
+BTN_MY_SUBSCRIPTION = "📅 Моя подписка"
+BTN_INSTRUCTION = "📲 Инструкция"
+BTN_SUPPORT = "💬 Поддержка"
+BTN_DOCUMENTS = "📄 Документы"
+TARIFF_EMOJIS = {1: "🔹", 3: "🔷", 6: "💎"}
+
 router = Router(name="safetyweb")
 
 
@@ -55,9 +62,9 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     """Build the persistent user main menu."""
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Оформить доступ"), KeyboardButton(text="Моя подписка")],
-            [KeyboardButton(text="Инструкция"), KeyboardButton(text="Поддержка")],
-            [KeyboardButton(text="Документы")],
+            [KeyboardButton(text=BTN_BUY_ACCESS), KeyboardButton(text=BTN_MY_SUBSCRIPTION)],
+            [KeyboardButton(text=BTN_INSTRUCTION), KeyboardButton(text=BTN_SUPPORT)],
+            [KeyboardButton(text=BTN_DOCUMENTS)],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите действие",
@@ -70,7 +77,7 @@ def tariff_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"{label} — {TARIFF_PRICES[months]} ₽",
+                    text=f"{TARIFF_EMOJIS.get(months, '🔹')} {label} — {TARIFF_PRICES[months]} ₽",
                     callback_data=f"buy:{months}",
                 )
             ]
@@ -85,23 +92,23 @@ def docs_keyboard(settings: Settings) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Политика конфиденциальности",
+                    text="🔒 Политика конфиденциальности",
                     url=settings.privacy_policy_url,
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="Пользовательское соглашение",
+                    text="📜 Пользовательское соглашение",
                     url=settings.terms_url,
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="Тарифы и условия оплаты",
+                    text="💳 Тарифы и условия оплаты",
                     url=settings.tariffs_url,
                 )
             ],
-            [InlineKeyboardButton(text="Поддержка", callback_data="docs:support")],
+            [InlineKeyboardButton(text="💬 Поддержка", callback_data="docs:support")],
         ]
     )
 
@@ -128,7 +135,7 @@ def format_tariffs() -> str:
 
 def payment_request_keyboard(months: int, test_mode: bool = False) -> InlineKeyboardMarkup:
     """Build inline keyboard for submitting a payment or test access request."""
-    button_text = "Получить тестовый доступ" if test_mode else "Создать заявку на оплату"
+    button_text = "🧪 Получить тестовый доступ" if test_mode else "💳 Создать заявку на оплату"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -147,7 +154,7 @@ def confirm_payment_keyboard(provider_payment_id: str, months: int) -> InlineKey
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Подтвердить оплату",
+                    text="✅ Подтвердить оплату",
                     callback_data=f"confirm:{provider_payment_id}:{months}",
                 )
             ]
@@ -162,7 +169,7 @@ async def start(message: Message, state: FSMContext) -> None:
     await message.answer(
         "🌏 ЛадНет | Безопасный Интернет\n\n"
         "Цифровой сервис защищённого сетевого доступа.\n"
-        "Оформите доступ, проверьте подписку или обратитесь в поддержку.",
+        "Нажмите «🛒 Оформить доступ», проверьте подписку или обратитесь в поддержку.",
         reply_markup=main_menu_keyboard(),
     )
 
@@ -172,10 +179,10 @@ async def help_command(message: Message, settings: Settings) -> None:
     """Show help and support contacts."""
     await message.answer(
         "Помощь по сервису ЛадНет:\n\n"
-        "• Оформить доступ — выбрать тариф и создать заявку на оплату.\n"
-        "• Моя подписка — проверить активный доступ.\n"
-        "• Инструкция — открыть краткую инструкцию по настройке.\n"
-        "• Документы — политика, соглашение, тарифы и условия оплаты.\n\n"
+        "• 🛒 Оформить доступ — выбрать тариф и создать заявку на оплату.\n"
+        "• 📅 Моя подписка — проверить активный доступ.\n"
+        "• 📲 Инструкция — открыть краткую инструкцию по настройке.\n"
+        "• 📄 Документы — политика, соглашение, тарифы и условия оплаты.\n\n"
         f"{support_contact_text(settings)}",
         reply_markup=main_menu_keyboard(),
     )
@@ -201,7 +208,7 @@ async def tariffs_command(message: Message, settings: Settings) -> None:
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="Тарифы и условия оплаты",
+                        text="💳 Тарифы и условия оплаты",
                         url=settings.tariffs_url,
                     )
                 ]
@@ -216,7 +223,7 @@ async def subscription_command(message: Message) -> None:
     await my_subscription(message)
 
 
-@router.message(F.text == "Документы")
+@router.message(F.text == BTN_DOCUMENTS)
 async def show_documents(message: Message, settings: Settings) -> None:
     """Show legal documents and related quick actions."""
     await message.answer(
@@ -239,7 +246,7 @@ async def docs_support(callback: CallbackQuery, settings: Settings) -> None:
     await callback.answer()
 
 
-@router.message(F.text == "Оформить доступ")
+@router.message(F.text == BTN_BUY_ACCESS)
 async def show_tariffs(message: Message, state: FSMContext) -> None:
     """Show available tariffs."""
     await state.set_state(PurchaseState.choosing_tariff)
@@ -381,7 +388,7 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
     await callback.answer("Оплата подтверждена")
 
 
-@router.message(F.text == "Моя подписка")
+@router.message(F.text == BTN_MY_SUBSCRIPTION)
 async def my_subscription(message: Message) -> None:
     """Show current subscription status."""
     if message.from_user is None:
@@ -401,7 +408,7 @@ async def admin_menu(message: Message, settings: Settings) -> None:
     await message.answer(
         "Админ-меню MVP:\n"
         "• заявки приходят администраторам автоматически;\n"
-        "• подтверждение оплаты — кнопкой «Подтвердить оплату» в заявке;\n"
+        "• подтверждение оплаты — кнопкой «✅ Подтвердить оплату» в заявке;\n"
         "• проверка 3x-ui без создания клиента — командой «XUI debug»."
     )
 
@@ -434,12 +441,12 @@ async def xui_debug(message: Message, settings: Settings) -> None:
     )
 
 
-@router.message(F.text == "Инструкция")
+@router.message(F.text == BTN_INSTRUCTION)
 async def instruction(message: Message) -> None:
     """Show protected access setup instructions."""
     await message.answer(
         "Инструкция:\n\n"
-        "1. Оформите доступ и дождитесь выдачи ссылки для защищённого соединения.\n"
+        "1. Нажмите «🛒 Оформить доступ» и дождитесь выдачи ссылки для защищённого соединения.\n"
         "2. Скопируйте полученную ссылку.\n"
         "3. Установите приложение Happ на Android или iOS.\n"
         "4. Нажмите импорт из буфера обмена или вставьте ссылку вручную.\n"
@@ -449,7 +456,7 @@ async def instruction(message: Message) -> None:
     )
 
 
-@router.message(F.text == "Поддержка")
+@router.message(F.text == BTN_SUPPORT)
 async def support(message: Message, settings: Settings) -> None:
     """Show support information."""
     await message.answer(support_contact_text(settings))
