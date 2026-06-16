@@ -56,6 +56,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="Оформить доступ"), KeyboardButton(text="Моя подписка")],
             [KeyboardButton(text="Инструкция"), KeyboardButton(text="Поддержка")],
+            [KeyboardButton(text="Документы")],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите действие",
@@ -70,6 +71,38 @@ def tariff_keyboard() -> InlineKeyboardMarkup:
             for months, label in TARIFFS.items()
         ]
     )
+
+
+def docs_keyboard(settings: Settings) -> InlineKeyboardMarkup:
+    """Build inline keyboard with legal documents and support actions."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Политика конфиденциальности",
+                    url=settings.privacy_policy_url,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Пользовательское соглашение",
+                    url=settings.terms_url,
+                )
+            ],
+            [InlineKeyboardButton(text="Тарифы", callback_data="docs:tariffs")],
+            [InlineKeyboardButton(text="Поддержка", callback_data="docs:support")],
+        ]
+    )
+
+
+def format_tariffs() -> str:
+    """Format tariffs for document menu callbacks."""
+    lines = ["Доступные тарифы:"]
+    for months, label in TARIFFS.items():
+        price = TARIFF_PRICES[months]
+        price_text = f"{price} {PAYMENT_CURRENCY}" if price else "уточняйте у поддержки"
+        lines.append(f"• {label}: {price_text}")
+    return "\n".join(lines)
 
 
 def payment_request_keyboard(months: int, test_mode: bool = False) -> InlineKeyboardMarkup:
@@ -109,6 +142,26 @@ async def start(message: Message, state: FSMContext) -> None:
         "Добро пожаловать в SafetyWeb! Выберите действие в меню ниже.",
         reply_markup=main_menu_keyboard(),
     )
+
+
+@router.message(F.text == "Документы")
+async def show_documents(message: Message, settings: Settings) -> None:
+    """Show legal documents and related quick actions."""
+    await message.answer("Документы и полезная информация:", reply_markup=docs_keyboard(settings))
+
+
+@router.callback_query(F.data == "docs:tariffs")
+async def docs_tariffs(callback: CallbackQuery) -> None:
+    """Show tariff list from the documents menu."""
+    await callback.message.answer(format_tariffs())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "docs:support")
+async def docs_support(callback: CallbackQuery, settings: Settings) -> None:
+    """Show support contacts from the documents menu."""
+    await callback.message.answer(f"Напишите в поддержку: {escape(settings.support_contact)}")
+    await callback.answer()
 
 
 @router.message(F.text == "Оформить доступ")
@@ -305,9 +358,9 @@ async def instruction(message: Message) -> None:
 
 
 @router.message(F.text == "Поддержка")
-async def support(message: Message) -> None:
+async def support(message: Message, settings: Settings) -> None:
     """Show support information."""
-    await message.answer("Напишите в поддержку: @support")
+    await message.answer(f"Напишите в поддержку: {escape(settings.support_contact)}")
 
 
 async def main() -> None:
