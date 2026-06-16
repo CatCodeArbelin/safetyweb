@@ -67,7 +67,12 @@ def tariff_keyboard() -> InlineKeyboardMarkup:
     """Build inline keyboard with available VPN tariffs."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=label, callback_data=f"buy:{months}")]
+            [
+                InlineKeyboardButton(
+                    text=f"{label} — {TARIFF_PRICES[months]} ₽",
+                    callback_data=f"buy:{months}",
+                )
+            ]
             for months, label in TARIFFS.items()
         ]
     )
@@ -191,6 +196,7 @@ async def choose_tariff(
         await callback.answer("Неизвестный тариф", show_alert=True)
         return
 
+    selected_tariff = f"{TARIFFS[months]} — {TARIFF_PRICES[months]} ₽"
     await state.update_data(months=months)
     await state.set_state(PurchaseState.waiting_payment)
     payment_hint = (
@@ -199,7 +205,7 @@ async def choose_tariff(
         else "Нажмите кнопку ниже, чтобы создать заявку на ручную оплату."
     )
     await callback.message.answer(
-        f"Вы выбрали тариф: <b>{TARIFFS[months]}</b>.\n"
+        f"Вы выбрали тариф: <b>{selected_tariff}</b>.\n"
         f"{payment_hint}",
         reply_markup=payment_request_keyboard(months, test_mode=settings.test_mode),
     )
