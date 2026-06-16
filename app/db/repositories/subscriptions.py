@@ -10,7 +10,7 @@ from app.db.models import Subscription, SubscriptionStatus, User
 
 
 class SubscriptionRepository:
-    """Persist and query VPN subscriptions."""
+    """Persist and query protected access subscriptions."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

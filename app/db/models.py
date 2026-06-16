@@ -79,7 +79,7 @@ class User(Base):
 
 
 class VpnNode(Base):
-    """VPN node managed by the application."""
+    """Protected access node managed by the application."""
 
     __tablename__ = "vpn_nodes"
 
@@ -97,7 +97,7 @@ class VpnNode(Base):
 
 
 class Subscription(Base):
-    """User VPN subscription."""
+    """User protected access subscription."""
 
     __tablename__ = "subscriptions"
 
@@ -177,7 +177,7 @@ class SubscriptionNotification(Base):
 
 
 class Payment(Base):
-    """Payment for a VPN subscription."""
+    """Payment for a protected access subscription."""
 
     __tablename__ = "payments"
 

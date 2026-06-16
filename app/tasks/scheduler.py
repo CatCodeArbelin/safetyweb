@@ -56,7 +56,7 @@ def create_scheduler(bot: Bot | None = None, settings: Settings | None = None) -
 
 
 async def expire_subscriptions(bot: Bot, settings: Settings | None = None) -> None:
-    """Disable or delete expired active VPN clients and notify users once."""
+    """Disable or delete expired active protected access clients and notify users once."""
     app_settings = settings or Settings()
     now = datetime.now(tz=UTC)
     xui_client = XuiClient(settings=app_settings)

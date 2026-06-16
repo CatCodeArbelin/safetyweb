@@ -64,7 +64,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
 
 
 def tariff_keyboard() -> InlineKeyboardMarkup:
-    """Build inline keyboard with available VPN tariffs."""
+    """Build inline keyboard with available protected access tariffs."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -291,7 +291,7 @@ async def create_payment_request(
 
 @router.callback_query(F.data.startswith("confirm:"))
 async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
-    """Let an admin confirm payment and provision VPN access for the user."""
+    """Let an admin confirm payment and provision protected access for the user."""
     if callback.from_user is None or callback.from_user.id not in settings.admin_ids:
         await callback.answer("Недостаточно прав", show_alert=True)
         return
@@ -374,7 +374,7 @@ async def xui_debug(message: Message, settings: Settings) -> None:
 
 @router.message(F.text == "Инструкция")
 async def instruction(message: Message) -> None:
-    """Show VPN setup instructions."""
+    """Show protected access setup instructions."""
     await message.answer(
         "Инструкция:\n\n"
         "1. Оформите доступ и дождитесь выдачи ссылки для защищённого соединения.\n"
