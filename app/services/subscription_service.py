@@ -19,7 +19,7 @@ class SubscriptionService:
     def format_status(subscription: Subscription | None) -> str:
         """Format subscription status for a user-facing Telegram message."""
         if subscription is None:
-            return "У вас пока нет активной подписки. Нажмите «Купить VPN», чтобы создать заявку."
+            return "У вас пока нет активной подписки. Нажмите «Оформить доступ», чтобы создать заявку."
 
         expires_at = subscription.expires_at.astimezone(UTC)
         link = (subscription.vpn_config or {}).get("connection_link")
@@ -31,5 +31,5 @@ class SubscriptionService:
             f"Лимит трафика: <b>{subscription.traffic_limit_gb or 'безлимит'} GB</b>"
         )
         if isinstance(link, str) and link:
-            text += f"\n\nVPN-ссылка:\n<code>{link}</code>"
+            text += f"\n\nСсылка для защищённого соединения:\n<code>{link}</code>"
         return text

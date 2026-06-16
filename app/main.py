@@ -54,7 +54,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     """Build the persistent user main menu."""
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Купить VPN"), KeyboardButton(text="Моя подписка")],
+            [KeyboardButton(text="Оформить доступ"), KeyboardButton(text="Моя подписка")],
             [KeyboardButton(text="Инструкция"), KeyboardButton(text="Поддержка")],
         ],
         resize_keyboard=True,
@@ -106,12 +106,12 @@ async def start(message: Message, state: FSMContext) -> None:
     """Handle /start and show the main menu."""
     await state.clear()
     await message.answer(
-        "Добро пожаловать в SafetyWeb VPN! Выберите действие в меню ниже.",
+        "Добро пожаловать в SafetyWeb! Выберите действие в меню ниже.",
         reply_markup=main_menu_keyboard(),
     )
 
 
-@router.message(F.text == "Купить VPN")
+@router.message(F.text == "Оформить доступ")
 async def show_tariffs(message: Message, state: FSMContext) -> None:
     """Show available tariffs."""
     await state.set_state(PurchaseState.choosing_tariff)
@@ -168,7 +168,7 @@ async def create_payment_request(
         await state.clear()
         await callback.message.answer(
             "Тестовый режим включён ✅\n\n"
-            f"Ваша VPN-ссылка на тариф <b>{TARIFFS[months]}</b>:\n"
+            f"Ваша ссылка для защищённого соединения на тариф <b>{TARIFFS[months]}</b>:\n"
             f"<code>{escape(vpn_link)}</code>",
             reply_markup=main_menu_keyboard(),
         )
@@ -203,7 +203,7 @@ async def create_payment_request(
     await state.clear()
     await callback.message.answer(
         "Заявка создана. После проверки оплаты администратор подтвердит её, "
-        "и бот отправит вам VPN-ссылку.",
+        "и бот отправит вам ссылку для защищённого соединения.",
         reply_markup=main_menu_keyboard(),
     )
     await callback.answer("Заявка отправлена")
@@ -230,11 +230,11 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
     await callback.bot.send_message(
         user_id,
         "Оплата подтверждена ✅\n\n"
-        f"Ваша VPN-ссылка на тариф <b>{TARIFFS.get(months, f'{months} мес.')}</b>:\n"
+        f"Ваша ссылка для защищённого соединения на тариф <b>{TARIFFS.get(months, f'{months} мес.')}</b>:\n"
         f"<code>{escape(vpn_link)}</code>",
     )
     await callback.message.edit_text(
-        f"Оплата подтверждена. VPN-ссылка отправлена пользователю <code>{user_id}</code>."
+        f"Оплата подтверждена. Ссылка для защищённого соединения отправлена пользователю <code>{user_id}</code>."
     )
     await callback.answer("Оплата подтверждена")
 
@@ -298,7 +298,7 @@ async def instruction(message: Message) -> None:
     await message.answer(
         "Инструкция:\n"
         "1. Оплатите выбранный тариф и дождитесь подтверждения.\n"
-        "2. Скопируйте полученную VPN-ссылку.\n"
+        "2. Скопируйте полученную ссылку для защищённого соединения.\n"
         "3. Установите Happ на Android или iOS.\n"
         "4. Нажмите импорт из буфера обмена или вставьте ссылку вручную."
     )
