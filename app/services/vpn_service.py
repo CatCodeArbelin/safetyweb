@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class VpnService:
     """Coordinate protected access account provisioning and updates."""
 
-    ALLOWED_TARIFF_MONTHS = {1, 3, 6}
+    ALLOWED_TARIFF_MONTHS = {1, 3, 6, 12}
 
     def __init__(
         self,
@@ -59,7 +59,7 @@ class VpnService:
     ) -> str:
         """Provision a 3x-ui client and persist the matching subscription."""
         if months not in self.ALLOWED_TARIFF_MONTHS:
-            msg = "Subscription tariff must be 1, 3, or 6 months"
+            msg = "Subscription tariff must be 1, 3, 6, or 12 months"
             raise ValueError(msg)
 
         user = await UserRepository(session).get_or_create(telegram_id)
