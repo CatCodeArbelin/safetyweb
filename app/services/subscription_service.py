@@ -23,13 +23,15 @@ class SubscriptionService:
 
         expires_at = subscription.expires_at.astimezone(UTC)
         link = (subscription.vpn_config or {}).get("connection_link")
+        traffic_limit = subscription.traffic_limit_gb
+        traffic_text = "безлимитный" if not traffic_limit else f"{traffic_limit} ГБ"
         text = (
             "Ваша подписка активна ✅\n\n"
             f"Inbound: <code>{subscription.inbound_id}</code>\n"
             f"Клиент: <code>{subscription.xui_email}</code>\n"
             f"Действует до: <b>{expires_at:%d.%m.%Y %H:%M UTC}</b>\n"
-            f"Лимит трафика: <b>{subscription.traffic_limit_gb or 'безлимит'} GB</b>"
+            f"Объём трафика: <b>{traffic_text}</b>"
         )
         if isinstance(link, str) and link:
-            text += f"\n\nСсылка для защищённого соединения:\n<code>{link}</code>"
+            text += f"\n\nСсылка для защищённого соединения: <code>{link}</code>"
         return text
