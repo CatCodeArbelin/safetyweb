@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     bot_public_url: str = "https://t.me/LadnetBot"
     support_username: str = "@arbelin94"
     support_second_username: str | None = "@BamboleiloO87"
-    support_email: str | None = "[catcodework@gmail.com](mailto:catcodework@gmail.com)"
+    support_email: str | None = "catcodework@gmail.com"
     privacy_policy_url: str = "https://telegra.ph/Politika-konfidencialnosti-LadNet-06-16"
     terms_url: str = "https://telegra.ph/Polzovatelskoe-soglashenie-LadNet-06-16"
     tariffs_url: str = "https://telegra.ph/Tarify-i-usloviya-oplaty-LadNet-06-16"

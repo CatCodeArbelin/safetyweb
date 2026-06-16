@@ -6,7 +6,7 @@ from html import escape
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart, StateFilter
+from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.redis import RedisStorage
@@ -20,6 +20,7 @@ from aiogram.types import (
 )
 
 from app.config import Settings
+from app.db.models import PaymentStatus
 from app.services.payment_service import PaymentService
 from app.services.subscription_service import SubscriptionService
 from app.services.vpn_service import VpnService
@@ -166,6 +167,55 @@ async def start(message: Message, state: FSMContext) -> None:
     )
 
 
+@router.message(Command("help"))
+async def help_command(message: Message, settings: Settings) -> None:
+    """Show help and support contacts."""
+    await message.answer(
+        "Помощь по сервису ЛадНет:\n\n"
+        "• Оформить доступ — выбрать тариф и создать заявку на оплату.\n"
+        "• Моя подписка — проверить активный доступ.\n"
+        "• Инструкция — открыть краткую инструкцию по настройке.\n"
+        "• Документы — политика, соглашение, тарифы и условия оплаты.\n\n"
+        f"{support_contact_text(settings)}",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+@router.message(Command("docs"))
+async def docs_command(message: Message, settings: Settings) -> None:
+    """Show service documents."""
+    await message.answer(
+        "Документы и полезная информация сервиса ЛадНет:",
+        reply_markup=docs_keyboard(settings),
+    )
+
+
+@router.message(Command("tariffs"))
+async def tariffs_command(message: Message, settings: Settings) -> None:
+    """Show current tariffs and payment terms link."""
+    await message.answer(
+        "Актуальные тарифы ЛадНет:\n\n"
+        f"{format_tariffs()}\n\n"
+        "Полные условия оплаты доступны по ссылке ниже.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Тарифы и условия оплаты",
+                        url=settings.tariffs_url,
+                    )
+                ]
+            ]
+        ),
+    )
+
+
+@router.message(Command("subscription"))
+async def subscription_command(message: Message) -> None:
+    """Show subscription status from a bot command."""
+    await my_subscription(message)
+
+
 @router.message(F.text == "Документы")
 async def show_documents(message: Message, settings: Settings) -> None:
     """Show legal documents and related quick actions."""
@@ -299,6 +349,18 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
     _, provider_payment_id, months_raw = (callback.data or "").split(":", maxsplit=2)
     months = int(months_raw)
     payment_service = PaymentService()
+    status = await payment_service.get_payment_status(provider_payment_id)
+    if status == PaymentStatus.PAID:
+        await callback.answer("Платёж уже был подтверждён ранее", show_alert=True)
+        await callback.message.answer(
+            f"Платёж <code>{escape(provider_payment_id)}</code> уже был подтверждён ранее. "
+            "Повторная выдача доступа не выполнена."
+        )
+        return
+    if status in {PaymentStatus.REFUNDED, PaymentStatus.FAILED}:
+        await callback.answer("Платёж нельзя подтвердить в этом статусе", show_alert=True)
+        return
+
     payment = await payment_service.confirm_manual_payment(provider_payment_id)
     user_id = payment.user.telegram_id
     vpn_service = VpnService(settings=settings)
