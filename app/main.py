@@ -152,7 +152,9 @@ async def start(message: Message, state: FSMContext) -> None:
     """Handle /start and show the main menu."""
     await state.clear()
     await message.answer(
-        "Добро пожаловать в SafetyWeb! Выберите действие в меню ниже.",
+        "🌏 ЛадНет | Безопасный Интернет\n\n"
+        "Цифровой сервис защищённого сетевого доступа.\n"
+        "Оформите доступ, проверьте подписку или обратитесь в поддержку.",
         reply_markup=main_menu_keyboard(),
     )
 

@@ -76,7 +76,7 @@ async def expire_subscriptions(bot: Bot, settings: Settings | None = None) -> No
                 await _safe_send_message(
                     bot,
                     subscription.user.telegram_id,
-                    "Ваша индивидуальная подписка SafetyWeb закончилась. Доступ к цифровому сервису защищённого сетевого доступа отключён.",
+                    "Ваша индивидуальная подписка ЛадНет закончилась. Цифровой доступ отключён.",
                 )
     finally:
         await xui_client.close()
@@ -193,8 +193,8 @@ async def _safe_send_message(bot: Bot, telegram_id: int, text: str) -> None:
 def _reminder_text(days_before: int, expires_at: datetime) -> str:
     expires_text = expires_at.strftime("%d.%m.%Y %H:%M UTC")
     if days_before == 0:
-        return f"Ваша индивидуальная подписка SafetyWeb заканчивается сегодня ({expires_text})."
+        return f"Ваша индивидуальная подписка ЛадНет заканчивается сегодня ({expires_text})."
     return (
-        f"Ваша индивидуальная подписка SafetyWeb закончится через {days_before} дн. "
+        f"Ваша индивидуальная подписка ЛадНет закончится через {days_before} дн. "
         f"({expires_text}). Продлите её, чтобы доступ не прервался."
     )
