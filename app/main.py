@@ -127,7 +127,7 @@ def format_tariffs() -> str:
 
 def payment_request_keyboard(months: int, test_mode: bool = False) -> InlineKeyboardMarkup:
     """Build inline keyboard for submitting a payment or test access request."""
-    button_text = "Получить тестовый ключ" if test_mode else "Создать заявку на оплату"
+    button_text = "Получить тестовый доступ" if test_mode else "Создать заявку на оплату"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -193,7 +193,7 @@ async def docs_support(callback: CallbackQuery, settings: Settings) -> None:
 async def show_tariffs(message: Message, state: FSMContext) -> None:
     """Show available tariffs."""
     await state.set_state(PurchaseState.choosing_tariff)
-    await message.answer("Выберите срок подписки:", reply_markup=tariff_keyboard())
+    await message.answer("Выберите срок цифрового доступа:", reply_markup=tariff_keyboard())
 
 
 @router.callback_query(
@@ -212,12 +212,13 @@ async def choose_tariff(
     await state.update_data(months=months)
     await state.set_state(PurchaseState.waiting_payment)
     payment_hint = (
-        "Тестовый режим включён: оплата не потребуется."
+        "Тестовый режим включён: оплата не потребуется. "
+        "Нажмите кнопку ниже, чтобы получить тестовый доступ."
         if settings.test_mode
-        else "Нажмите кнопку ниже, чтобы создать заявку на ручную оплату."
+        else "Нажмите кнопку ниже, чтобы создать заявку на оплату."
     )
     await callback.message.answer(
-        f"Вы выбрали тариф: <b>{selected_tariff}</b>.\n"
+        f"Вы выбрали тариф: {selected_tariff}\n\n"
         f"{payment_hint}",
         reply_markup=payment_request_keyboard(months, test_mode=settings.test_mode),
     )
@@ -251,7 +252,7 @@ async def create_payment_request(
             f"<code>{escape(vpn_link)}</code>",
             reply_markup=main_menu_keyboard(),
         )
-        await callback.answer("Тестовый ключ выдан")
+        await callback.answer("Тестовый доступ выдан")
         return
 
     payment_service = PaymentService()
