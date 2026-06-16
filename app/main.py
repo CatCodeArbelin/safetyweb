@@ -107,9 +107,11 @@ def docs_keyboard(settings: Settings) -> InlineKeyboardMarkup:
 
 def support_contact_text(settings: Settings) -> str:
     """Format support contact information for bot messages."""
-    lines = [f"Поддержка: {escape(settings.support_username)}"]
+    lines = ["Поддержка:", escape(settings.support_username)]
+    if settings.support_second_username:
+        lines.append(escape(settings.support_second_username))
     if settings.support_email:
-        lines.append(f"Email: {escape(settings.support_email)}")
+        lines.extend(["", "Email:", escape(settings.support_email)])
     return "\n".join(lines)
 
 
