@@ -1,7 +1,7 @@
 [project]
 name = "safetyweb"
 version = "0.1.0"
-description = "Telegram bot for VPN subscriptions"
+description = "Telegram bot for protected network access subscriptions"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

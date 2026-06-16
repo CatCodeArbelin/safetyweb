@@ -56,7 +56,7 @@ def create_scheduler(bot: Bot | None = None, settings: Settings | None = None) -
 
 
 async def expire_subscriptions(bot: Bot, settings: Settings | None = None) -> None:
-    """Disable or delete expired active VPN clients and notify users once."""
+    """Disable or delete expired active protected access clients and notify users once."""
     app_settings = settings or Settings()
     now = datetime.now(tz=UTC)
     xui_client = XuiClient(settings=app_settings)
@@ -76,7 +76,7 @@ async def expire_subscriptions(bot: Bot, settings: Settings | None = None) -> No
                 await _safe_send_message(
                     bot,
                     subscription.user.telegram_id,
-                    "Ваша подписка SafetyWeb VPN закончилась. Доступ к VPN отключён.",
+                    "Ваша индивидуальная подписка ЛадНет закончилась. Цифровой доступ отключён.",
                 )
     finally:
         await xui_client.close()
@@ -193,8 +193,8 @@ async def _safe_send_message(bot: Bot, telegram_id: int, text: str) -> None:
 def _reminder_text(days_before: int, expires_at: datetime) -> str:
     expires_text = expires_at.strftime("%d.%m.%Y %H:%M UTC")
     if days_before == 0:
-        return f"Ваша подписка SafetyWeb VPN заканчивается сегодня ({expires_text})."
+        return f"Ваша индивидуальная подписка ЛадНет заканчивается сегодня ({expires_text})."
     return (
-        f"Ваша подписка SafetyWeb VPN закончится через {days_before} дн. "
+        f"Ваша индивидуальная подписка ЛадНет закончится через {days_before} дн. "
         f"({expires_text}). Продлите её, чтобы доступ не прервался."
     )

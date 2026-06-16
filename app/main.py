@@ -6,7 +6,7 @@ from html import escape
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart, StateFilter
+from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.redis import RedisStorage
@@ -20,6 +20,7 @@ from aiogram.types import (
 )
 
 from app.config import Settings
+from app.db.models import PaymentStatus
 from app.services.payment_service import PaymentService
 from app.services.subscription_service import SubscriptionService
 from app.services.vpn_service import VpnService
@@ -33,9 +34,9 @@ TARIFFS = {
 }
 
 TARIFF_PRICES = {
-    1: 0,
-    3: 0,
-    6: 0,
+    1: 199,
+    3: 499,
+    6: 899,
 }
 
 PAYMENT_CURRENCY = "RUB"
@@ -54,8 +55,9 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     """Build the persistent user main menu."""
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Купить VPN"), KeyboardButton(text="Моя подписка")],
+            [KeyboardButton(text="Оформить доступ"), KeyboardButton(text="Моя подписка")],
             [KeyboardButton(text="Инструкция"), KeyboardButton(text="Поддержка")],
+            [KeyboardButton(text="Документы")],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите действие",
@@ -63,18 +65,70 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
 
 
 def tariff_keyboard() -> InlineKeyboardMarkup:
-    """Build inline keyboard with available VPN tariffs."""
+    """Build inline keyboard with available protected access tariffs."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=label, callback_data=f"buy:{months}")]
+            [
+                InlineKeyboardButton(
+                    text=f"{label} — {TARIFF_PRICES[months]} ₽",
+                    callback_data=f"buy:{months}",
+                )
+            ]
             for months, label in TARIFFS.items()
         ]
     )
 
 
+def docs_keyboard(settings: Settings) -> InlineKeyboardMarkup:
+    """Build inline keyboard with legal documents and support actions."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Политика конфиденциальности",
+                    url=settings.privacy_policy_url,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Пользовательское соглашение",
+                    url=settings.terms_url,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Тарифы и условия оплаты",
+                    url=settings.tariffs_url,
+                )
+            ],
+            [InlineKeyboardButton(text="Поддержка", callback_data="docs:support")],
+        ]
+    )
+
+
+def support_contact_text(settings: Settings) -> str:
+    """Format support contact information for bot messages."""
+    lines = ["Поддержка:", escape(settings.support_username)]
+    if settings.support_second_username:
+        lines.append(escape(settings.support_second_username))
+    if settings.support_email:
+        lines.extend(["", "Email:", escape(settings.support_email)])
+    return "\n".join(lines)
+
+
+def format_tariffs() -> str:
+    """Format tariffs for document menu callbacks."""
+    lines = ["Доступные тарифы:"]
+    for months, label in TARIFFS.items():
+        price = TARIFF_PRICES[months]
+        price_text = f"{price} {PAYMENT_CURRENCY}" if price else "уточняйте у поддержки"
+        lines.append(f"• {label}: {price_text}")
+    return "\n".join(lines)
+
+
 def payment_request_keyboard(months: int, test_mode: bool = False) -> InlineKeyboardMarkup:
     """Build inline keyboard for submitting a payment or test access request."""
-    button_text = "Получить тестовый ключ" if test_mode else "Создать заявку на оплату"
+    button_text = "Получить тестовый доступ" if test_mode else "Создать заявку на оплату"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -106,16 +160,90 @@ async def start(message: Message, state: FSMContext) -> None:
     """Handle /start and show the main menu."""
     await state.clear()
     await message.answer(
-        "Добро пожаловать в SafetyWeb VPN! Выберите действие в меню ниже.",
+        "🌏 ЛадНет | Безопасный Интернет\n\n"
+        "Цифровой сервис защищённого сетевого доступа.\n"
+        "Оформите доступ, проверьте подписку или обратитесь в поддержку.",
         reply_markup=main_menu_keyboard(),
     )
 
 
-@router.message(F.text == "Купить VPN")
+@router.message(Command("help"))
+async def help_command(message: Message, settings: Settings) -> None:
+    """Show help and support contacts."""
+    await message.answer(
+        "Помощь по сервису ЛадНет:\n\n"
+        "• Оформить доступ — выбрать тариф и создать заявку на оплату.\n"
+        "• Моя подписка — проверить активный доступ.\n"
+        "• Инструкция — открыть краткую инструкцию по настройке.\n"
+        "• Документы — политика, соглашение, тарифы и условия оплаты.\n\n"
+        f"{support_contact_text(settings)}",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+@router.message(Command("docs"))
+async def docs_command(message: Message, settings: Settings) -> None:
+    """Show service documents."""
+    await message.answer(
+        "Документы и полезная информация сервиса ЛадНет:",
+        reply_markup=docs_keyboard(settings),
+    )
+
+
+@router.message(Command("tariffs"))
+async def tariffs_command(message: Message, settings: Settings) -> None:
+    """Show current tariffs and payment terms link."""
+    await message.answer(
+        "Актуальные тарифы ЛадНет:\n\n"
+        f"{format_tariffs()}\n\n"
+        "Полные условия оплаты доступны по ссылке ниже.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Тарифы и условия оплаты",
+                        url=settings.tariffs_url,
+                    )
+                ]
+            ]
+        ),
+    )
+
+
+@router.message(Command("subscription"))
+async def subscription_command(message: Message) -> None:
+    """Show subscription status from a bot command."""
+    await my_subscription(message)
+
+
+@router.message(F.text == "Документы")
+async def show_documents(message: Message, settings: Settings) -> None:
+    """Show legal documents and related quick actions."""
+    await message.answer(
+        "Документы и полезная информация сервиса ЛадНет:",
+        reply_markup=docs_keyboard(settings),
+    )
+
+
+@router.callback_query(F.data == "docs:tariffs")
+async def docs_tariffs(callback: CallbackQuery) -> None:
+    """Show tariff list from the documents menu."""
+    await callback.message.answer(format_tariffs())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "docs:support")
+async def docs_support(callback: CallbackQuery, settings: Settings) -> None:
+    """Show support contacts from the documents menu."""
+    await callback.message.answer(support_contact_text(settings))
+    await callback.answer()
+
+
+@router.message(F.text == "Оформить доступ")
 async def show_tariffs(message: Message, state: FSMContext) -> None:
     """Show available tariffs."""
     await state.set_state(PurchaseState.choosing_tariff)
-    await message.answer("Выберите срок подписки:", reply_markup=tariff_keyboard())
+    await message.answer("Выберите срок цифрового доступа:", reply_markup=tariff_keyboard())
 
 
 @router.callback_query(
@@ -130,15 +258,17 @@ async def choose_tariff(
         await callback.answer("Неизвестный тариф", show_alert=True)
         return
 
+    selected_tariff = f"{TARIFFS[months]} — {TARIFF_PRICES[months]} ₽"
     await state.update_data(months=months)
     await state.set_state(PurchaseState.waiting_payment)
     payment_hint = (
-        "Тестовый режим включён: оплата не потребуется."
+        "Тестовый режим включён: оплата не потребуется. "
+        "Нажмите кнопку ниже, чтобы получить тестовый доступ."
         if settings.test_mode
-        else "Нажмите кнопку ниже, чтобы создать заявку на ручную оплату."
+        else "Нажмите кнопку ниже, чтобы создать заявку на оплату."
     )
     await callback.message.answer(
-        f"Вы выбрали тариф: <b>{TARIFFS[months]}</b>.\n"
+        f"Вы выбрали тариф: {selected_tariff}\n\n"
         f"{payment_hint}",
         reply_markup=payment_request_keyboard(months, test_mode=settings.test_mode),
     )
@@ -168,11 +298,11 @@ async def create_payment_request(
         await state.clear()
         await callback.message.answer(
             "Тестовый режим включён ✅\n\n"
-            f"Ваша VPN-ссылка на тариф <b>{TARIFFS[months]}</b>:\n"
+            f"Ваша ссылка для защищённого соединения на тариф <b>{TARIFFS[months]}</b>:\n"
             f"<code>{escape(vpn_link)}</code>",
             reply_markup=main_menu_keyboard(),
         )
-        await callback.answer("Тестовый ключ выдан")
+        await callback.answer("Тестовый доступ выдан")
         return
 
     payment_service = PaymentService()
@@ -203,7 +333,7 @@ async def create_payment_request(
     await state.clear()
     await callback.message.answer(
         "Заявка создана. После проверки оплаты администратор подтвердит её, "
-        "и бот отправит вам VPN-ссылку.",
+        "и бот отправит вам ссылку для защищённого соединения.",
         reply_markup=main_menu_keyboard(),
     )
     await callback.answer("Заявка отправлена")
@@ -211,7 +341,7 @@ async def create_payment_request(
 
 @router.callback_query(F.data.startswith("confirm:"))
 async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
-    """Let an admin confirm payment and provision VPN access for the user."""
+    """Let an admin confirm payment and provision protected access for the user."""
     if callback.from_user is None or callback.from_user.id not in settings.admin_ids:
         await callback.answer("Недостаточно прав", show_alert=True)
         return
@@ -219,6 +349,18 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
     _, provider_payment_id, months_raw = (callback.data or "").split(":", maxsplit=2)
     months = int(months_raw)
     payment_service = PaymentService()
+    status = await payment_service.get_payment_status(provider_payment_id)
+    if status == PaymentStatus.PAID:
+        await callback.answer("Платёж уже был подтверждён ранее", show_alert=True)
+        await callback.message.answer(
+            f"Платёж <code>{escape(provider_payment_id)}</code> уже был подтверждён ранее. "
+            "Повторная выдача доступа не выполнена."
+        )
+        return
+    if status in {PaymentStatus.REFUNDED, PaymentStatus.FAILED}:
+        await callback.answer("Платёж нельзя подтвердить в этом статусе", show_alert=True)
+        return
+
     payment = await payment_service.confirm_manual_payment(provider_payment_id)
     user_id = payment.user.telegram_id
     vpn_service = VpnService(settings=settings)
@@ -230,11 +372,11 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
     await callback.bot.send_message(
         user_id,
         "Оплата подтверждена ✅\n\n"
-        f"Ваша VPN-ссылка на тариф <b>{TARIFFS.get(months, f'{months} мес.')}</b>:\n"
+        f"Ваша ссылка для защищённого соединения на тариф <b>{TARIFFS.get(months, f'{months} мес.')}</b>:\n"
         f"<code>{escape(vpn_link)}</code>",
     )
     await callback.message.edit_text(
-        f"Оплата подтверждена. VPN-ссылка отправлена пользователю <code>{user_id}</code>."
+        f"Оплата подтверждена. Ссылка для защищённого соединения отправлена пользователю <code>{user_id}</code>."
     )
     await callback.answer("Оплата подтверждена")
 
@@ -294,20 +436,23 @@ async def xui_debug(message: Message, settings: Settings) -> None:
 
 @router.message(F.text == "Инструкция")
 async def instruction(message: Message) -> None:
-    """Show VPN setup instructions."""
+    """Show protected access setup instructions."""
     await message.answer(
-        "Инструкция:\n"
-        "1. Оплатите выбранный тариф и дождитесь подтверждения.\n"
-        "2. Скопируйте полученную VPN-ссылку.\n"
-        "3. Установите Happ на Android или iOS.\n"
-        "4. Нажмите импорт из буфера обмена или вставьте ссылку вручную."
+        "Инструкция:\n\n"
+        "1. Оформите доступ и дождитесь выдачи ссылки для защищённого соединения.\n"
+        "2. Скопируйте полученную ссылку.\n"
+        "3. Установите приложение Happ на Android или iOS.\n"
+        "4. Нажмите импорт из буфера обмена или вставьте ссылку вручную.\n"
+        "5. Если Happ недоступен, можно использовать совместимые приложения: "
+        "Hiddify, Shadowrocket, v2ray и другие.\n"
+        "6. Если возникли сложности, обратитесь в поддержку."
     )
 
 
 @router.message(F.text == "Поддержка")
-async def support(message: Message) -> None:
+async def support(message: Message, settings: Settings) -> None:
     """Show support information."""
-    await message.answer("Напишите в поддержку: @support")
+    await message.answer(support_contact_text(settings))
 
 
 async def main() -> None:

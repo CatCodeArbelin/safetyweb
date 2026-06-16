@@ -102,20 +102,27 @@ class ManualPaymentProvider(PaymentProvider):
 
     async def confirm_payment(self, provider_payment_id: str) -> Payment:
         """Confirm a manual payment after an admin verifies it."""
+        paid_at = datetime.now(tz=UTC)
         if self.session is not None:
+            payment = await self._get_payment(self.session, provider_payment_id)
+            if payment.status == PaymentStatus.PAID:
+                return payment
             return await self._set_status(
                 self.session,
                 provider_payment_id,
                 PaymentStatus.PAID,
-                paid_at=datetime.now(tz=UTC),
+                paid_at=paid_at,
             )
 
         async with async_session_maker() as session:
+            payment = await self._get_payment(session, provider_payment_id)
+            if payment.status == PaymentStatus.PAID:
+                return payment
             payment = await self._set_status(
                 session,
                 provider_payment_id,
                 PaymentStatus.PAID,
-                paid_at=datetime.now(tz=UTC),
+                paid_at=paid_at,
             )
             await session.commit()
             return payment
