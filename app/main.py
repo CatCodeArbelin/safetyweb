@@ -33,9 +33,9 @@ TARIFFS = {
 }
 
 TARIFF_PRICES = {
-    1: 299,
-    3: 799,
-    6: 1490,
+    1: 199,
+    3: 499,
+    6: 899,
 }
 
 PAYMENT_CURRENCY = "RUB"
