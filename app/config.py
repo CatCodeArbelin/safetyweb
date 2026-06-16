@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     xui_default_traffic_gb: int = 0
     xui_default_limit_ip: int = 1
     test_mode: bool = False
+    privacy_policy_url: str = "https://example.com/privacy"
+    terms_url: str = "https://example.com/terms"
+    support_contact: str = "@support"
     admin_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
 
     @field_validator("xui_expired_client_policy")
