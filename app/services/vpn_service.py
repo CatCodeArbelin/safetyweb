@@ -1,4 +1,4 @@
-"""VPN provisioning service."""
+"""Protected access provisioning service."""
 
 import json
 import logging
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class VpnService:
-    """Coordinate VPN account provisioning and updates."""
+    """Coordinate protected access account provisioning and updates."""
 
     ALLOWED_TARIFF_MONTHS = {1, 3, 6}
 
