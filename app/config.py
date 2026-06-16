@@ -34,10 +34,15 @@ class Settings(BaseSettings):
     xui_default_traffic_gb: int = 0
     xui_default_limit_ip: int = 1
     test_mode: bool = False
-    support_username: str
-    support_email: str | None = None
-    privacy_policy_url: str
-    terms_url: str
+    service_name: str = "ЛадНет"
+    service_display_name: str = "🌏 ЛадНет | Безопасный Интернет"
+    bot_public_url: str = "https://t.me/LadnetBot"
+    support_username: str = "@arbelin94"
+    support_second_username: str | None = "@BamboleiloO87"
+    support_email: str | None = "[catcodework@gmail.com](mailto:catcodework@gmail.com)"
+    privacy_policy_url: str = "https://telegra.ph/Politika-konfidencialnosti-LadNet-06-16"
+    terms_url: str = "https://telegra.ph/Polzovatelskoe-soglashenie-LadNet-06-16"
+    tariffs_url: str = "https://telegra.ph/Tarify-i-usloviya-oplaty-LadNet-06-16"
     admin_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
 
     @field_validator("xui_expired_client_policy")
