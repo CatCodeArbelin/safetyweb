@@ -31,12 +31,14 @@ TARIFFS = {
     1: "1 месяц",
     3: "3 месяца",
     6: "6 месяцев",
+    12: "12 месяцев",
 }
 
 TARIFF_PRICES = {
-    1: 199,
-    3: 499,
-    6: 899,
+    1: 249,
+    3: 649,
+    6: 1190,
+    12: 2190,
 }
 
 PAYMENT_CURRENCY = "RUB"
@@ -46,7 +48,7 @@ BTN_MY_SUBSCRIPTION = "📅 Моя подписка"
 BTN_INSTRUCTION = "📲 Инструкция"
 BTN_SUPPORT = "💬 Поддержка"
 BTN_DOCUMENTS = "📄 Документы"
-TARIFF_EMOJIS = {1: "🔹", 3: "🔷", 6: "💎"}
+TARIFF_EMOJIS = {1: "🔹", 3: "🔷", 6: "💎", 12: "👑"}
 
 router = Router(name="safetyweb")
 
@@ -128,8 +130,9 @@ def format_tariffs() -> str:
     lines = ["Доступные тарифы:"]
     for months, label in TARIFFS.items():
         price = TARIFF_PRICES[months]
-        price_text = f"{price} {PAYMENT_CURRENCY}" if price else "уточняйте у поддержки"
-        lines.append(f"• {label}: {price_text}")
+        emoji = TARIFF_EMOJIS.get(months, "🔹")
+        price_text = f"{price} ₽" if price else "уточняйте у поддержки"
+        lines.append(f"{emoji} {label} — {price_text}")
     return "\n".join(lines)
 
 
