@@ -95,6 +95,14 @@ def docs_keyboard(settings: Settings) -> InlineKeyboardMarkup:
     )
 
 
+def support_contact_text(settings: Settings) -> str:
+    """Format support contact information for bot messages."""
+    contacts = [escape(settings.support_username)]
+    if settings.support_email:
+        contacts.append(escape(settings.support_email))
+    return "Напишите в поддержку: " + ", ".join(contacts)
+
+
 def format_tariffs() -> str:
     """Format tariffs for document menu callbacks."""
     lines = ["Доступные тарифы:"]
@@ -160,7 +168,7 @@ async def docs_tariffs(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "docs:support")
 async def docs_support(callback: CallbackQuery, settings: Settings) -> None:
     """Show support contacts from the documents menu."""
-    await callback.message.answer(f"Напишите в поддержку: {escape(settings.support_contact)}")
+    await callback.message.answer(support_contact_text(settings))
     await callback.answer()
 
 
@@ -360,7 +368,7 @@ async def instruction(message: Message) -> None:
 @router.message(F.text == "Поддержка")
 async def support(message: Message, settings: Settings) -> None:
     """Show support information."""
-    await message.answer(f"Напишите в поддержку: {escape(settings.support_contact)}")
+    await message.answer(support_contact_text(settings))
 
 
 async def main() -> None:
