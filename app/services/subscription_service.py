@@ -19,7 +19,7 @@ class SubscriptionService:
     def format_status(subscription: Subscription | None) -> str:
         """Format subscription status for a user-facing Telegram message."""
         if subscription is None:
-            return "У вас пока нет активной подписки. Нажмите «Оформить доступ», чтобы создать заявку."
+            return "У вас пока нет активной подписки. Нажмите «🛒 Оформить доступ», чтобы создать заявку."
 
         expires_at = subscription.expires_at.astimezone(UTC)
         link = (subscription.vpn_config or {}).get("connection_link")
