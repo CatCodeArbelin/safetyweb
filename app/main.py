@@ -661,14 +661,6 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
         await payment_service.attach_subscription(
             provider_payment_id, provision_result.subscription_id
         )
-        benefit_granted = await BenefitService(
-            settings=settings
-        ).grant_early_buyer_discount_if_eligible(user_id)
-        referral_rewards = []
-        if not settings.test_mode:
-            referral_rewards = await ReferralService(
-                settings=settings
-            ).apply_first_payment_rewards(user_id, months)
     except XuiError as error:
         await notify_admins(
             callback.bot,
@@ -717,6 +709,39 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
     finally:
         if vpn_service is not None:
             await vpn_service.close()
+
+    benefit_granted = False
+    try:
+        benefit_granted = await BenefitService(
+            settings=settings
+        ).grant_early_buyer_discount_if_eligible(user_id)
+    except Exception as error:
+        await notify_admins(
+            callback.bot,
+            settings,
+            "Ошибка выдачи скидки раннего покупателя\n"
+            f"Пользователь: <code>{user_id}</code>\n"
+            f"Ошибка: <code>{escape(str(error))}</code>",
+        )
+        benefit_granted = False
+
+    referral_rewards = []
+    if not settings.test_mode:
+        try:
+            referral_rewards = await ReferralService(
+                settings=settings
+            ).apply_first_payment_rewards(user_id, months)
+        except Exception as error:
+            await notify_admins(
+                callback.bot,
+                settings,
+                "Ошибка начисления реферального бонуса\n"
+                f"Пользователь: <code>{user_id}</code>\n"
+                f"Месяцев: <code>{months}</code>\n"
+                f"Ошибка: <code>{escape(str(error))}</code>",
+            )
+            referral_rewards = []
+
     paid_base_price = Decimal(str(TARIFF_PRICES.get(months, payment.amount)))
     paid_amount = Decimal(str(payment.amount))
     paid_discount = paid_base_price - paid_amount
