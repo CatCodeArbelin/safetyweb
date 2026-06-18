@@ -1,12 +1,15 @@
 """Platega webhook event processing."""
 
+import json
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from html import escape
 from typing import TYPE_CHECKING, Any
 
 from app.config import Settings
 from app.db.models import PaymentStatus, PaymentWebhookEvent
 from app.db.repositories.payments import PaymentRepository
+from app.db.repositories.users import UserRepository
 from app.db.session import async_session_maker
 from app.services.payment_finalization_service import PaymentFinalizationService
 from app.services.payment_service import PLATEGA_PROVIDER_NAME
@@ -119,6 +122,10 @@ class PlategaWebhookService:
 
             transaction_status = self._extract_transaction_status(verified_transaction)
             event_payment_id = event.payment_id
+            recovery_payload = self._extract_recovery_payload(
+                verified_transaction,
+                event.payload,
+            )
 
         async with async_session_maker() as session:
             repository = PaymentRepository(session)
@@ -133,9 +140,34 @@ class PlategaWebhookService:
                     payment = None
 
             if payment is None:
-                msg = f"Platega payment {provider_payment_id!r} was not found"
+                payment = await self._recover_payment_by_internal_id(
+                    repository,
+                    provider_payment_id,
+                    recovery_payload,
+                    verified_transaction,
+                )
+
+            if payment is None:
+                payment = await self._create_recovery_payment(
+                    repository,
+                    provider_payment_id,
+                    recovery_payload,
+                    verified_transaction,
+                )
+
+            if payment is None:
+                msg = (
+                    f"Platega payment {provider_payment_id!r} was not found and "
+                    "could not be recovered from transaction payload"
+                )
                 await repository.mark_webhook_failed(webhook_event_id, msg)
                 await session.commit()
+                await self._notify_admins(
+                    "Не удалось восстановить Platega-платеж из webhook\n"
+                    f"Webhook event ID: <code>{webhook_event_id}</code>\n"
+                    f"Payment ID: <code>{escape(provider_payment_id)}</code>\n"
+                    "Доступ не выдавался.",
+                )
                 return
 
             db_event = await repository.get_webhook_event(webhook_event_id)
@@ -228,6 +260,73 @@ class PlategaWebhookService:
             await session.commit()
             return True
 
+    async def _recover_payment_by_internal_id(
+        self,
+        repository: PaymentRepository,
+        provider_payment_id: str,
+        payload: dict[str, Any],
+        transaction: dict[str, Any],
+    ) -> Any | None:
+        """Attach the verified Platega id to an existing payment from payload ids."""
+        internal_payment_id = self._extract_first_payload_value(
+            payload,
+            "internalPaymentId",
+            "paymentId",
+        )
+        if internal_payment_id is None:
+            return None
+        try:
+            payment_id = int(internal_payment_id)
+        except (TypeError, ValueError):
+            return None
+
+        payment = await repository.get_for_update(payment_id)
+        if payment is None:
+            return None
+
+        payment.provider = PLATEGA_PROVIDER_NAME
+        payment.provider_payment_id = provider_payment_id
+        payment.provider_data = {
+            **(payment.provider_data or {}),
+            "last_status_response": self._sanitize_transaction(transaction),
+        }
+        if payment.tariff_months is None:
+            payment.tariff_months = self._extract_positive_int(payload, "months")
+        await repository.session.flush()
+        return payment
+
+    async def _create_recovery_payment(
+        self,
+        repository: PaymentRepository,
+        provider_payment_id: str,
+        payload: dict[str, Any],
+        transaction: dict[str, Any],
+    ) -> Any | None:
+        """Create a pending local payment when Platega returned enough metadata."""
+        telegram_id = self._extract_positive_int(payload, "telegramId")
+        months = self._extract_positive_int(payload, "months")
+        if telegram_id is None or months is None:
+            return None
+
+        user = await UserRepository(repository.session).get_or_create(telegram_id)
+        return await repository.create_payment(
+            user_id=user.id,
+            provider=PLATEGA_PROVIDER_NAME,
+            provider_payment_id=provider_payment_id,
+            status=PaymentStatus.PENDING,
+            tariff_months=months,
+            amount=self._extract_decimal(transaction, "amount") or Decimal("0"),
+            currency=(
+                str(self._extract_first_payload_value(transaction, "currency") or "RUB")
+                .strip()
+                .upper()
+            ),
+            provider_data={
+                "recovered_from_webhook": True,
+                "last_status_response": self._sanitize_transaction(transaction),
+            },
+        )
+
     def _extract_months(
         self, event: PaymentWebhookEvent, payment_tariff_months: int | None
     ) -> int:
@@ -249,6 +348,116 @@ class PlategaWebhookService:
             return payment_tariff_months
         msg = f"Cannot determine tariff months for webhook event {event.id}"
         raise ValueError(msg)
+
+    @classmethod
+    def _extract_recovery_payload(
+        cls,
+        transaction: dict[str, Any],
+        event_payload: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Extract recovery metadata from payload and data.payload containers."""
+        for source in (transaction, event_payload or {}):
+            for payload in cls._payload_candidates(source):
+                if (
+                    cls._extract_first_payload_value(
+                        payload,
+                        "internalPaymentId",
+                        "paymentId",
+                        "telegramId",
+                        "months",
+                    )
+                    is not None
+                ):
+                    return payload
+        return {}
+
+    @classmethod
+    def _payload_candidates(cls, data: Any) -> list[dict[str, Any]]:
+        parsed = cls._parse_payload_value(data)
+        if not isinstance(parsed, dict):
+            return []
+
+        candidates = []
+        for key in ("payload",):
+            nested = cls._parse_payload_value(parsed.get(key))
+            if isinstance(nested, dict):
+                candidates.append(nested)
+
+        data_value = cls._parse_payload_value(parsed.get("data"))
+        if isinstance(data_value, dict):
+            nested = cls._parse_payload_value(data_value.get("payload"))
+            if isinstance(nested, dict):
+                candidates.append(nested)
+
+        candidates.append(parsed)
+        return candidates
+
+    @classmethod
+    def _parse_payload_value(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return value
+        return value
+
+    @classmethod
+    def _extract_first_payload_value(cls, data: dict[str, Any], *keys: str) -> Any:
+        for value in cls._candidate_values(data, *keys):
+            if value is not None and value != "":
+                return value
+        return None
+
+    @classmethod
+    def _extract_positive_int(cls, data: dict[str, Any], *keys: str) -> int | None:
+        value = cls._extract_first_payload_value(data, *keys)
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        if parsed <= 0:
+            return None
+        return parsed
+
+    @classmethod
+    def _extract_decimal(cls, data: dict[str, Any], *keys: str) -> Decimal | None:
+        value = cls._extract_first_payload_value(data, *keys)
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _sanitize_transaction(cls, data: dict[str, Any]) -> dict[str, Any]:
+        sanitized = cls._sanitize_value(data)
+        return sanitized if isinstance(sanitized, dict) else {}
+
+    @classmethod
+    def _sanitize_value(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                str(key): (
+                    "***"
+                    if cls._is_sensitive_key(str(key))
+                    else cls._sanitize_value(item_value)
+                )
+                for key, item_value in value.items()
+            }
+        if isinstance(value, list):
+            return [cls._sanitize_value(item) for item in value]
+        if isinstance(value, Decimal):
+            if value == value.to_integral_value():
+                return int(value)
+            return str(value)
+        return value
+
+    @staticmethod
+    def _is_sensitive_key(key: str) -> bool:
+        normalized = key.lower()
+        return any(
+            marker in normalized
+            for marker in ("token", "secret", "password", "authorization", "api_key")
+        )
 
     @classmethod
     def _candidate_values(cls, data: Any, *keys: str) -> list[Any]:
