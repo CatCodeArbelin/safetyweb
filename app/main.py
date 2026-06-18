@@ -820,8 +820,14 @@ async def my_subscription(message: Message) -> None:
         await message.answer("Не удалось определить пользователя.")
         return
 
-    subscription = await SubscriptionService().get_active_subscription(message.from_user.id)
-    await message.answer(SubscriptionService.format_status(subscription))
+    details = await SubscriptionService().get_status_details(message.from_user.id)
+    await message.answer(
+        SubscriptionService.format_status(
+            details.subscription,
+            early_buyer_discount_percent=details.early_buyer_discount_percent,
+            pending_referral_bonus_days=details.pending_referral_bonus_days,
+        )
+    )
 
 
 @router.message(Command("link"))
