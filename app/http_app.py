@@ -1,8 +1,10 @@
 """HTTP application for payment provider callbacks."""
 
+from __future__ import annotations
+
 import hashlib
 import hmac
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, status
 from sqlalchemy.exc import IntegrityError
@@ -12,6 +14,9 @@ from app.db.repositories.payments import PaymentRepository
 from app.db.session import async_session_maker
 from app.services.payment_service import PLATEGA_PROVIDER_NAME
 from app.services.platega_webhook_service import PlategaWebhookService
+
+if TYPE_CHECKING:
+    from aiogram import Bot
 
 SENSITIVE_HEADER_MARKERS = (
     "authorization",
@@ -24,7 +29,7 @@ SENSITIVE_HEADER_MARKERS = (
 )
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, bot: Bot | None = None) -> FastAPI:
     """Create the FastAPI application."""
     app_settings = settings or Settings()
     app = FastAPI(title="SafetyWeb HTTP callbacks")
@@ -95,7 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 }
 
         background_tasks.add_task(
-            PlategaWebhookService(app_settings).process_event,
+            PlategaWebhookService(app_settings, bot=bot).process_event,
             event.id,
         )
         return {"ok": True, "duplicate": False, "event_id": event.id}
