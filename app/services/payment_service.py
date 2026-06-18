@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Final
+from typing import Any, Final
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +13,7 @@ from app.config import Settings
 from app.db.models import Payment, PaymentStatus, User
 from app.db.repositories.payments import PaymentRepository
 from app.db.session import async_session_maker
+from app.services.platega_client import PlategaClient, build_platega_payload
 
 
 MANUAL_PROVIDER_NAME: Final = "manual"
@@ -184,10 +185,15 @@ class ManualPaymentProvider(PaymentProvider):
 
 
 class PlategaPaymentProvider(PaymentProvider):
-    """Platega payment provider placeholder selected by settings."""
+    """Platega payment provider selected by settings."""
 
-    def __init__(self, settings: Settings | None = None) -> None:
-        self.settings = settings
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        client: PlategaClient | None = None,
+    ) -> None:
+        self.settings = settings or Settings()
+        self.client = client
 
     async def create_payment(
         self,
@@ -196,12 +202,155 @@ class PlategaPaymentProvider(PaymentProvider):
         amount: Decimal | int | str,
         currency: str,
     ) -> PaymentCreateResult:
-        """Create a Platega payment.
+        """Create a local pending payment and initialize a Platega transaction."""
+        async with async_session_maker() as session:
+            user = await ManualPaymentProvider._get_or_create_user(session, user_id)
+            description = f"Payment for tariff {tariff_id}"
+            repository = PaymentRepository(session)
+            payment = await repository.create_payment(
+                user_id=user.id,
+                provider=PLATEGA_PROVIDER_NAME,
+                status=PaymentStatus.PENDING,
+                tariff_months=tariff_id,
+                amount=amount,
+                currency=currency,
+                description=description,
+            )
+            await session.commit()
 
-        The provider is selectable now; API-specific integration details are intentionally
-        handled separately once Platega credentials and request schema are configured.
-        """
-        raise NotImplementedError("Platega payment creation is not configured yet")
+            client = self.client or PlategaClient(settings=self.settings)
+            should_close_client = self.client is None
+            try:
+                provider_response = await client.create_transaction(
+                    amount=payment.amount,
+                    currency=payment.currency,
+                    description=description,
+                    payload=build_platega_payload(
+                        payment_id=payment.id,
+                        telegram_id=user_id,
+                        months=tariff_id,
+                    ),
+                    user_id=user_id,
+                    user_name=str(user_id),
+                    payment_method=self.settings.platega_payment_method,
+                )
+            finally:
+                if should_close_client:
+                    await client.close()
+
+            provider_payment_id = self._extract_first_str(
+                provider_response,
+                "id",
+                "transactionId",
+                "transaction_id",
+                "paymentId",
+                "payment_id",
+                "uuid",
+            )
+            payment_url = self._extract_first_str(
+                provider_response,
+                "redirectUrl",
+                "redirect_url",
+                "paymentUrl",
+                "payment_url",
+                "url",
+                "link",
+            )
+
+            payment.provider_payment_id = provider_payment_id
+            payment.provider_redirect_url = payment_url
+            payment.provider_payment_method = self._extract_first_str(
+                provider_response,
+                "paymentMethod",
+                "payment_method",
+                "method",
+            )
+            payment.provider_expires_at = self._extract_datetime(
+                provider_response,
+                "expiresAt",
+                "expires_at",
+                "expiredAt",
+                "expired_at",
+            )
+            payment.provider_data = self._sanitize_provider_data(provider_response)
+            await session.flush()
+            await session.commit()
+
+            return PaymentCreateResult(
+                payment=payment,
+                provider_payment_id=payment.provider_payment_id,
+                payment_url=payment.provider_redirect_url,
+                provider=PLATEGA_PROVIDER_NAME,
+            )
+
+    @staticmethod
+    def _extract_first_str(data: dict[str, Any], *keys: str) -> str | None:
+        for key in keys:
+            value = data.get(key)
+            if value is not None and value != "":
+                return str(value)
+        return None
+
+    @staticmethod
+    def _extract_datetime(data: dict[str, Any], *keys: str) -> datetime | None:
+        value = PlategaPaymentProvider._extract_first_str(data, *keys)
+        if value is None:
+            return None
+        try:
+            normalized = value.replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed
+
+    def _sanitize_provider_data(self, data: dict[str, Any]) -> dict[str, Any]:
+        secret_values = [
+            secret.get_secret_value()
+            for secret in (
+                self.settings.platega_api_key,
+                self.settings.platega_callback_secret,
+            )
+            if secret is not None
+        ]
+        return self._sanitize_value(data, secret_values)
+
+    @classmethod
+    def _sanitize_value(cls, value: Any, secret_values: list[str]) -> Any:
+        if isinstance(value, dict):
+            sanitized: dict[str, Any] = {}
+            for item_key, item_value in value.items():
+                key = str(item_key)
+                if cls._is_sensitive_key(key):
+                    sanitized[key] = "***"
+                else:
+                    sanitized[key] = cls._sanitize_value(item_value, secret_values)
+            return sanitized
+        if isinstance(value, list):
+            return [cls._sanitize_value(item, secret_values) for item in value]
+        if isinstance(value, str):
+            sanitized_text = value
+            for secret_value in secret_values:
+                if secret_value:
+                    sanitized_text = sanitized_text.replace(secret_value, "***")
+            return sanitized_text
+        return value
+
+    @staticmethod
+    def _is_sensitive_key(key: str) -> bool:
+        normalized = key.lower()
+        return any(
+            marker in normalized
+            for marker in (
+                "secret",
+                "token",
+                "password",
+                "authorization",
+                "api_key",
+                "apikey",
+            )
+        )
 
     async def get_payment_status(self, provider_payment_id: str) -> PaymentStatus:
         """Return the locally saved Platega payment status."""
