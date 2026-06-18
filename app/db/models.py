@@ -285,7 +285,8 @@ class SubscriptionNotification(Base):
         UniqueConstraint(
             "subscription_id",
             "notification_type",
-            name="uq_subscription_notifications_once",
+            "period_expires_at",
+            name="uq_subscription_notifications_once_per_period",
         ),
     )
 
@@ -295,6 +296,9 @@ class SubscriptionNotification(Base):
     )
     notification_type: Mapped[SubscriptionNotificationType] = mapped_column(
         String(64), nullable=False
+    )
+    period_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
     )
     sent_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
