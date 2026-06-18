@@ -58,6 +58,7 @@ PROVISIONING_USER_ERROR = (
 )
 
 BTN_BUY_ACCESS = "🛒 Оформить / продлить"
+BTN_PROFILE = "👤 Мой профиль"
 BTN_MY_SUBSCRIPTION = "📅 Моя подписка"
 BTN_MY_LINK = "🔗 Моя ссылка"
 BTN_INSTRUCTION = "📲 Инструкция"
@@ -80,10 +81,9 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     """Build the persistent user main menu."""
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=BTN_BUY_ACCESS), KeyboardButton(text=BTN_MY_SUBSCRIPTION)],
-            [KeyboardButton(text=BTN_MY_LINK), KeyboardButton(text=BTN_INSTRUCTION)],
-            [KeyboardButton(text=BTN_SUPPORT), KeyboardButton(text=BTN_DOCUMENTS)],
+            [KeyboardButton(text=BTN_BUY_ACCESS), KeyboardButton(text=BTN_PROFILE)],
             [KeyboardButton(text=BTN_INVITE_FRIEND)],
+            [KeyboardButton(text=BTN_INSTRUCTION), KeyboardButton(text=BTN_SUPPORT)],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите действие",
@@ -130,6 +130,33 @@ def trial_access_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🧪 Получить тестовый доступ", callback_data="trial_access")]
         ]
     )
+
+
+def profile_keyboard(
+    has_active_subscription: bool, trial_available: bool
+) -> InlineKeyboardMarkup:
+    """Build inline keyboard for profile quick actions."""
+    keyboard: list[list[InlineKeyboardButton]] = []
+    if trial_available:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text="🧪 Получить тестовый доступ", callback_data="trial_access"
+                )
+            ]
+        )
+    if has_active_subscription:
+        keyboard.append(
+            [InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="renew")]
+        )
+    keyboard.extend(
+        [
+            [InlineKeyboardButton(text=BTN_MY_SUBSCRIPTION, callback_data="profile:subscription")],
+            [InlineKeyboardButton(text=BTN_MY_LINK, callback_data="profile:link")],
+            [InlineKeyboardButton(text=BTN_DOCUMENTS, callback_data="profile:documents")],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def renew_subscription_keyboard() -> InlineKeyboardMarkup:
@@ -1069,14 +1096,53 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
     await callback.answer("Оплата подтверждена")
 
 
-@router.message(F.text == BTN_MY_SUBSCRIPTION)
-async def my_subscription(message: Message) -> None:
-    """Show current subscription status."""
+@router.message(F.text == BTN_PROFILE)
+async def my_profile(message: Message, settings: Settings) -> None:
+    """Show profile actions and user benefit summary."""
     if message.from_user is None:
         await message.answer("Не удалось определить пользователя.")
         return
 
     details = await SubscriptionService().get_status_details(message.from_user.id)
+    has_active_subscription = details.subscription is not None
+    trial_available = False
+    if settings.trial_access_enabled and not has_active_subscription:
+        async with async_session_maker() as session:
+            user = await UserRepository(session).get_or_create_from_telegram(
+                message.from_user
+            )
+            trial_available = user.trial_used_at is None
+            await session.commit()
+
+    lines = [
+        "👤 Мой профиль",
+        "",
+        (
+            "Здесь можно проверить подписку, открыть ссылку подключения, "
+            "посмотреть документы или продлить цифровой доступ."
+        ),
+    ]
+    if details.early_buyer_discount_percent > 0:
+        lines.extend(
+            ["", f"Ваша постоянная скидка: {details.early_buyer_discount_percent}%"]
+        )
+    if details.pending_referral_bonus_days > 0:
+        lines.extend(
+            [
+                "",
+                f"Ожидают применения бонусные дни: {details.pending_referral_bonus_days}",
+            ]
+        )
+
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=profile_keyboard(has_active_subscription, trial_available),
+    )
+
+
+async def send_subscription_status(message: Message, telegram_id: int) -> None:
+    """Send current subscription status for a Telegram user."""
+    details = await SubscriptionService().get_status_details(telegram_id)
     status_text = SubscriptionService.format_status(
         details.subscription,
         early_buyer_discount_percent=details.early_buyer_discount_percent,
@@ -1089,15 +1155,19 @@ async def my_subscription(message: Message) -> None:
     await message.answer(status_text)
 
 
-@router.message(Command("link"))
-@router.message(F.text == BTN_MY_LINK)
-async def my_link(message: Message) -> None:
-    """Show the protected connection link for the active subscription."""
+@router.message(F.text == BTN_MY_SUBSCRIPTION)
+async def my_subscription(message: Message) -> None:
+    """Show current subscription status."""
     if message.from_user is None:
         await message.answer("Не удалось определить пользователя.")
         return
 
-    subscription = await SubscriptionService().get_active_subscription(message.from_user.id)
+    await send_subscription_status(message, message.from_user.id)
+
+
+async def send_protected_link(message: Message, telegram_id: int) -> None:
+    """Send the protected connection link for a Telegram user."""
+    subscription = await SubscriptionService().get_active_subscription(telegram_id)
     if subscription is None:
         await message.answer(SubscriptionService.format_status(subscription))
         return
@@ -1112,6 +1182,53 @@ async def my_link(message: Message) -> None:
         "🔗 Ваша ссылка для защищённого соединения:\n"
         f"<code>{escape(link)}</code>"
     )
+
+
+@router.message(Command("link"))
+@router.message(F.text == BTN_MY_LINK)
+async def my_link(message: Message) -> None:
+    """Show the protected connection link for the active subscription."""
+    if message.from_user is None:
+        await message.answer("Не удалось определить пользователя.")
+        return
+
+    await send_protected_link(message, message.from_user.id)
+
+
+@router.callback_query(F.data == "profile:subscription")
+async def profile_subscription(callback: CallbackQuery) -> None:
+    """Show subscription status from the profile menu."""
+    if not isinstance(callback.message, Message):
+        await callback.answer("Не удалось проверить подписку", show_alert=True)
+        return
+
+    await send_subscription_status(callback.message, callback.from_user.id)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "profile:link")
+async def profile_link(callback: CallbackQuery) -> None:
+    """Show protected connection link from the profile menu."""
+    if not isinstance(callback.message, Message):
+        await callback.answer("Не удалось открыть ссылку", show_alert=True)
+        return
+
+    await send_protected_link(callback.message, callback.from_user.id)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "profile:documents")
+async def profile_documents(callback: CallbackQuery, settings: Settings) -> None:
+    """Show service documents from the profile menu."""
+    if not isinstance(callback.message, Message):
+        await callback.answer("Не удалось открыть документы", show_alert=True)
+        return
+
+    await callback.message.answer(
+        "Документы и полезная информация сервиса ЛадНет:",
+        reply_markup=docs_keyboard(settings),
+    )
+    await callback.answer()
 
 
 @router.message(F.text == "Админ")
