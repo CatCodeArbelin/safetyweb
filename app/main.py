@@ -1,7 +1,7 @@
 """Application entry point."""
 
 import asyncio
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from html import escape
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -89,13 +89,31 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def tariff_keyboard() -> InlineKeyboardMarkup:
+def apply_discount_to_price(base_price: int, discount_percent: int) -> int:
+    """Apply a percentage discount to an integer ruble price."""
+    price = Decimal(str(base_price))
+    multiplier = Decimal(100 - discount_percent) / Decimal(100)
+    return int((price * multiplier).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def format_tariff_price(base_price: int, discount_percent: int) -> str:
+    """Format tariff price with an optional discount comparison."""
+    final_price = apply_discount_to_price(base_price, discount_percent)
+    if discount_percent <= 0 or final_price >= base_price:
+        return f"{base_price} ₽"
+    return f"{final_price} ₽ вместо {base_price} ₽"
+
+
+def tariff_keyboard(discount_percent: int = 0) -> InlineKeyboardMarkup:
     """Build inline keyboard with available protected access tariffs."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"{TARIFF_EMOJIS.get(months, '🔹')} {label} — {TARIFF_PRICES[months]} ₽",
+                    text=(
+                        f"{TARIFF_EMOJIS.get(months, '🔹')} {label} — "
+                        f"{format_tariff_price(TARIFF_PRICES[months], discount_percent)}"
+                    ),
                     callback_data=f"buy:{months}",
                 )
             ]
@@ -491,7 +509,6 @@ async def send_tariffs_screen(
     user_id: int | None = None,
 ) -> None:
     """Show available tariffs with renewal-aware copy."""
-    _ = settings
     if user_id is None:
         if message.from_user is None:
             await message.answer("Не удалось определить пользователя.")
@@ -507,8 +524,14 @@ async def send_tariffs_screen(
         else "Выберите срок цифрового доступа:"
     )
 
+    discount_percent = (
+        0
+        if settings.test_mode
+        else await BenefitService(settings=settings).get_active_discount_percent(user_id)
+    )
+
     await state.set_state(PurchaseState.choosing_tariff)
-    await message.answer(text, reply_markup=tariff_keyboard())
+    await message.answer(text, reply_markup=tariff_keyboard(discount_percent))
 
 
 @router.message(Command("renew"))
@@ -554,7 +577,17 @@ async def choose_tariff(
         await callback.answer("Неизвестный тариф", show_alert=True)
         return
 
-    selected_tariff = f"{TARIFFS[months]} — {TARIFF_PRICES[months]} ₽"
+    discount_percent = (
+        0
+        if settings.test_mode
+        else await BenefitService(settings=settings).get_active_discount_percent(
+            callback.from_user.id
+        )
+    )
+    selected_tariff = (
+        f"{TARIFFS[months]} — "
+        f"{format_tariff_price(TARIFF_PRICES[months], discount_percent)}"
+    )
     await state.update_data(months=months)
     await state.set_state(PurchaseState.waiting_payment)
     payment_hint = (
@@ -646,7 +679,7 @@ async def create_payment_request(
     benefit_service = BenefitService(settings=settings)
     base_price = TARIFF_PRICES[months]
     discount_percent = await benefit_service.get_active_discount_percent(user.id)
-    final_price = await benefit_service.apply_price_discount(user.id, base_price)
+    final_price = apply_discount_to_price(base_price, discount_percent)
     discount_summary = format_discount_summary(base_price, discount_percent, final_price)
 
     payment_service = PaymentService()
