@@ -605,8 +605,9 @@ async def send_tariffs_screen(
     """Show available tariffs with renewal-aware copy."""
     subscription = await SubscriptionService().get_active_subscription(telegram_id)
     text = (
-        "Ваша подписка уже активна ✅\n\n"
-        "Выберите, на сколько продлить цифровой доступ.\n"
+        "Ваша подписка активна ✅\n\n"
+        "Выберите, на сколько продлить текущий цифровой доступ.\n"
+        "Новая ссылка создаваться не будет.\n"
         "Оставшийся срок сохранится."
         if subscription is not None
         else "Выберите срок цифрового доступа:"
@@ -805,6 +806,9 @@ async def choose_tariff(
             )
         else:
             selected_tariff = f"{TARIFFS[months]} — {format_price(base_price)}"
+    active_subscription = await SubscriptionService().get_active_subscription(
+        callback.from_user.id
+    )
     await state.update_data(months=months)
     await state.set_state(PurchaseState.waiting_payment)
     payment_hint = (
@@ -813,9 +817,18 @@ async def choose_tariff(
         if settings.test_mode
         else "Нажмите кнопку ниже, чтобы создать заявку на оплату."
     )
+    if active_subscription is not None:
+        selection_text = (
+            f"Вы выбрали продление: {selected_tariff}\n\n"
+            "Новая ссылка создаваться не будет.\n"
+            "Оставшийся срок сохранится.\n\n"
+            f"{payment_hint}"
+        )
+    else:
+        selection_text = f"Вы выбрали тариф: {selected_tariff}\n\n{payment_hint}"
+
     await callback.message.answer(
-        f"Вы выбрали тариф: {selected_tariff}\n\n"
-        f"{payment_hint}",
+        selection_text,
         reply_markup=payment_request_keyboard(months, test_mode=settings.test_mode),
     )
     await callback.answer()
@@ -908,6 +921,8 @@ async def create_payment_request(
         await callback.answer("Тестовый доступ выдан")
         return
 
+    active_subscription = await SubscriptionService().get_active_subscription(user.id)
+
     benefit_service = BenefitService(settings=settings)
     base_price = TARIFF_PRICES[months]
     discount_percent = await benefit_service.get_active_discount_percent(user.id)
@@ -922,8 +937,13 @@ async def create_payment_request(
         currency=PAYMENT_CURRENCY,
     )
     await state.update_data(months=months, payment_id=payment.provider_payment_id)
+    admin_title = (
+        "Новая заявка на продление подписки"
+        if active_subscription is not None
+        else "Новая заявка на оформление доступа"
+    )
     admin_text = (
-        "Новая заявка на ручную оплату\n\n"
+        f"{admin_title}\n\n"
         f"Пользователь: <a href=\"tg://user?id={user.id}\">{escape(user.full_name)}</a>\n"
         f"Telegram ID: <code>{user.id}</code>\n"
         f"Username: @{escape(user.username) if user.username else '—'}\n"
@@ -941,10 +961,22 @@ async def create_payment_request(
         )
 
     await state.clear()
+    if active_subscription is not None:
+        user_request_text = (
+            "Заявка на продление создана.\n"
+            "После подтверждения оплаты текущий доступ будет продлён.\n"
+            "Ссылка останется прежней.\n\n"
+            f"{discount_summary}"
+        )
+    else:
+        user_request_text = (
+            "Заявка создана. После проверки оплаты администратор подтвердит её, "
+            "и бот отправит вам ссылку для защищённого соединения.\n\n"
+            f"{discount_summary}"
+        )
+
     await callback.message.answer(
-        "Заявка создана. После проверки оплаты администратор подтвердит её, "
-        "и бот отправит вам ссылку для защищённого соединения.\n\n"
-        f"{discount_summary}",
+        user_request_text,
         reply_markup=main_menu_keyboard(),
     )
     await callback.answer("Заявка отправлена")
@@ -1118,22 +1150,35 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
         else ""
     )
 
-    await callback.bot.send_message(
-        user_id,
-        "Оплата подтверждена ✅\n\n"
-        f"{'Доступ создан' if provision_result.action == 'created' else 'Подписка продлена'} "
-        f"на тариф <b>{TARIFFS.get(months, f'{months} мес.')}</b>.\n"
-        f"{paid_discount_summary}\n"
-        f"Действует до: <code>{format_provision_expires(provision_result)}</code>\n\n"
-        f"{benefit_granted_text}"
-        f"{referral_rewards_text}"
-        f"Ваша ссылка для защищённого соединения:\n"
-        f"<code>{escape(provision_result.connection_link)}</code>",
-    )
+    if provision_result.action == "extended":
+        user_confirmation_text = (
+            "Оплата подтверждена ✅\n\n"
+            f"Подписка продлена на тариф <b>{TARIFFS.get(months, f'{months} мес.')}</b>.\n"
+            "Ссылка для защищённого соединения остаётся прежней.\n\n"
+            f"{paid_discount_summary}\n"
+            f"Действует до: <code>{format_provision_expires(provision_result)}</code>\n\n"
+            f"{benefit_granted_text}"
+            f"{referral_rewards_text}"
+            f"Ваша ссылка для защищённого соединения:\n"
+            f"<code>{escape(provision_result.connection_link)}</code>"
+        )
+    else:
+        user_confirmation_text = (
+            "Оплата подтверждена ✅\n\n"
+            f"Доступ создан на тариф <b>{TARIFFS.get(months, f'{months} мес.')}</b>.\n"
+            f"{paid_discount_summary}\n"
+            f"Действует до: <code>{format_provision_expires(provision_result)}</code>\n\n"
+            f"{benefit_granted_text}"
+            f"{referral_rewards_text}"
+            f"Ваша ссылка для защищённого соединения:\n"
+            f"<code>{escape(provision_result.connection_link)}</code>"
+        )
+
+    await callback.bot.send_message(user_id, user_confirmation_text)
     admin_action_text = (
         "создана новая подписка"
         if provision_result.action == "created"
-        else "продлена активная подписка"
+        else "продлена активная подписка. Новая ссылка не создавалась"
     )
     await callback.message.edit_text(
         f"Оплата подтверждена: {admin_action_text}. "

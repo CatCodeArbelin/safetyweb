@@ -13,7 +13,11 @@ from dateutil.relativedelta import relativedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.db.repositories import SubscriptionRepository, UserRepository
+from app.db.repositories import (
+    ActiveSubscriptionAlreadyExistsError,
+    SubscriptionRepository,
+    UserRepository,
+)
 from app.db.session import async_session_maker
 from app.services.xui_client import XuiClient
 
@@ -230,6 +234,12 @@ class VpnService:
         """Provision a trial 3x-ui client and persist an active subscription."""
         now = datetime.now(UTC)
         user = await UserRepository(session).get_or_create(telegram_id)
+        existing = await SubscriptionRepository(session).get_active_by_telegram_id(
+            telegram_id
+        )
+        if existing is not None:
+            msg = f"Telegram user {telegram_id} already has an active subscription"
+            raise ActiveSubscriptionAlreadyExistsError(msg)
         client_id = str(uuid4())
         sub_id = f"trial_tg_{telegram_id}_{token_hex(4)}"
         email = sub_id
@@ -339,6 +349,13 @@ class VpnService:
             raise ValueError(msg)
 
         user = await UserRepository(session).get_or_create(telegram_id)
+        existing = await SubscriptionRepository(session).get_active_by_telegram_id(
+            telegram_id
+        )
+        if existing is not None:
+            return await self._extend_active_subscription(
+                session, existing, months, source_payment_id=source_payment_id
+            )
         client_id = str(uuid4())
         sub_id = f"tg_{telegram_id}_{token_hex(4)}"
         email = sub_id
