@@ -150,6 +150,38 @@ class XuiClient:
         """Update a client in the configured inbound."""
         if enable is not None:
             client_data = self._with_client_enable(client_data, client_id, enable)
+
+        try:
+            return await self.update_client_via_clients_api(client_data)
+        except XuiRequestError as error:
+            if "status=404" not in str(error):
+                raise
+            return await self.update_client_legacy(inbound_id, client_id, client_data)
+
+    async def update_client_via_clients_api(
+        self,
+        client_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Update a client by email using the current X-UI clients API."""
+        client = self._extract_single_client(client_data)
+        email = client.get("email")
+        if not isinstance(email, str) or not email:
+            msg = "X-UI client update requires client email"
+            raise ValueError(msg)
+
+        return await self._request(
+            "POST",
+            f"/panel/api/clients/update/{self._path_param(email)}",
+            json=client,
+        )
+
+    async def update_client_legacy(
+        self,
+        inbound_id: int | None,
+        client_id: str,
+        client_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Update a client using the legacy inbound-specific updateClient API."""
         payload = {
             "id": self._inbound_id(inbound_id),
             "settings": json.dumps(client_data),
@@ -178,6 +210,9 @@ class XuiClient:
                     updated_client["enable"] = enable
                 updated_clients.append(updated_client)
             data["clients"] = updated_clients
+        elif isinstance(data.get("email"), str):
+            data.setdefault("id", client_id)
+            data["enable"] = enable
         else:
             data["clients"] = [{"id": client_id, "enable": enable}]
         return data
@@ -249,6 +284,21 @@ class XuiClient:
             return clients[0]
 
         msg = "X-UI client payload must contain exactly one client"
+        raise ValueError(msg)
+
+    @staticmethod
+    def _extract_single_client(client_data: dict[str, Any]) -> dict[str, Any]:
+        """Return one client object from wrapper or direct client payloads."""
+        clients = client_data.get("clients")
+        if (
+            isinstance(clients, list)
+            and len(clients) == 1
+            and isinstance(clients[0], dict)
+        ):
+            return dict(clients[0])
+        if isinstance(client_data, dict) and isinstance(client_data.get("email"), str):
+            return dict(client_data)
+        msg = "X-UI client payload must contain one client with email"
         raise ValueError(msg)
 
     def _inbound_ids(self, inbound_id: int | list[int] | None = None) -> list[int]:
