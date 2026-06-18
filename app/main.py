@@ -1016,13 +1016,17 @@ async def create_payment_request(
 
 @router.callback_query(F.data.startswith("confirm:"))
 async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
-    """Let an admin confirm payment and provision protected access for the user."""
+    """Let an admin confirm a manual payment through the finalization service."""
     if callback.from_user is None or callback.from_user.id not in settings.admin_ids:
         await callback.answer("Недостаточно прав", show_alert=True)
         return
 
-    _, provider_payment_id, months_raw = (callback.data or "").split(":", maxsplit=2)
-    months = int(months_raw)
+    try:
+        _, provider_payment_id, _ = (callback.data or "").split(":", maxsplit=2)
+    except ValueError:
+        await callback.answer("Некорректные данные платежа", show_alert=True)
+        return
+
     try:
         finalization_result = await PaymentFinalizationService(
             settings=settings,
@@ -1041,7 +1045,6 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
             settings,
             format_access_error_alert(
                 error,
-                months=months,
                 provider_payment_id=provider_payment_id,
             ),
         )
@@ -1053,7 +1056,6 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
             settings,
             format_access_error_alert(
                 error,
-                months=months,
                 provider_payment_id=provider_payment_id,
             ),
         )
@@ -1065,7 +1067,6 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
             settings,
             format_access_error_alert(
                 error,
-                months=months,
                 provider_payment_id=provider_payment_id,
             ),
         )
@@ -1074,82 +1075,24 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
 
     if finalization_result.already_finalized:
         await callback.answer("Платёж уже подтверждён ранее", show_alert=True)
-        await callback.message.answer(
+        await callback.message.edit_text(
             f"Платёж <code>{escape(provider_payment_id)}</code> уже подтверждён ранее. "
             "Повторная выдача доступа не выполнена."
         )
         return
 
-    payment = finalization_result.payment
-    provision_result = finalization_result.provision_result
-    if provision_result is None:
-        await callback.answer("Платёж уже подтверждён ранее", show_alert=True)
+    if finalization_result.status == "attached_existing":
+        await callback.message.edit_text(
+            f"Платёж <code>{escape(provider_payment_id)}</code> уже был связан "
+            "с активированной подпиской. Пользовательское сообщение отправляет finalizer."
+        )
+        await callback.answer("Платёж уже был активирован")
         return
-    user_id = payment.user.telegram_id
-    benefit_granted = finalization_result.benefit_granted
-    referral_rewards = finalization_result.referral_rewards
 
-    paid_base_price = Decimal(str(TARIFF_PRICES.get(months, payment.amount)))
-    paid_amount = Decimal(str(payment.amount))
-    paid_discount = paid_base_price - paid_amount
-    paid_discount_percent = (
-        int((paid_discount * Decimal(100) / paid_base_price).quantize(Decimal("1")))
-        if paid_base_price
-        else 0
-    )
-    paid_discount_summary = format_discount_summary(
-        paid_base_price,
-        paid_discount_percent,
-        paid_amount,
-    )
-    benefit_granted_text = (
-        "Вам доступна постоянная скидка раннего пользователя 🎁\n\n"
-        if benefit_granted
-        else ""
-    )
-    referral_rewards_text = (
-        "Начислены реферальные бонусные дни 🎁\n\n"
-        if referral_rewards
-        else ""
-    )
-
-    if provision_result.action == "extended":
-        user_confirmation_text = (
-            "Оплата подтверждена ✅\n\n"
-            f"Подписка продлена на тариф <b>{TARIFFS.get(months, f'{months} мес.')}</b>.\n"
-            "Ссылка для защищённого соединения остаётся прежней.\n\n"
-            f"{paid_discount_summary}\n"
-            f"Действует до: <code>{format_provision_expires(provision_result)}</code>\n\n"
-            f"{benefit_granted_text}"
-            f"{referral_rewards_text}"
-            f"Ваша ссылка для защищённого соединения:\n"
-            f"<code>{escape(provision_result.connection_link)}</code>"
-        )
-    else:
-        user_confirmation_text = (
-            "Оплата подтверждена ✅\n\n"
-            f"Доступ создан на тариф <b>{TARIFFS.get(months, f'{months} мес.')}</b>.\n"
-            f"{paid_discount_summary}\n"
-            f"Действует до: <code>{format_provision_expires(provision_result)}</code>\n\n"
-            f"{benefit_granted_text}"
-            f"{referral_rewards_text}"
-            f"Ваша ссылка для защищённого соединения:\n"
-            f"<code>{escape(provision_result.connection_link)}</code>"
-        )
-
-    if not (payment.provider_data or {}).get("user_notified_at"):
-        await callback.bot.send_message(user_id, user_confirmation_text)
-    admin_action_text = (
-        "создана новая подписка"
-        if provision_result.action == "created"
-        else "продлена активная подписка. Новая ссылка не создавалась"
-    )
+    user_id = finalization_result.payment.user.telegram_id
     await callback.message.edit_text(
-        f"Оплата подтверждена: {admin_action_text}. "
-        f"Ссылка для защищённого соединения отправлена пользователю <code>{user_id}</code>.\n"
-        f"{paid_discount_summary}\n"
-        f"Скидка раннего покупателя выдана: <code>{'да' if benefit_granted else 'нет'}</code>\n"
-        f"Реферальных наград начислено: <code>{len(referral_rewards)}</code>"
+        f"Оплата подтверждена. Пользовательское сообщение отправляет finalizer. "
+        f"Пользователь: <code>{user_id}</code>."
     )
     await callback.answer("Оплата подтверждена")
 
