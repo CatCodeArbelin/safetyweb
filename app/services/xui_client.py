@@ -1,6 +1,7 @@
 """HTTP client for the X-UI panel."""
 
 import json
+import logging
 from typing import Any
 from urllib.parse import quote
 
@@ -8,6 +9,9 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 
 from app.config import Settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class XuiError(Exception):
@@ -56,8 +60,10 @@ class XuiClient:
             if api_token
             else None
         )
+        base_url = self.settings.xui_base_url.rstrip("/")
+        logger.debug("XUI base URL: %s", base_url)
         self._client = httpx.AsyncClient(
-            base_url=self.settings.xui_base_url.rstrip("/"),
+            base_url=base_url,
             follow_redirects=True,
             headers=headers,
         )
@@ -70,7 +76,7 @@ class XuiClient:
     async def login(self) -> dict[str, Any]:
         """Authenticate in X-UI and store session cookies in the HTTP client."""
         response = await self._client.post(
-            "/login",
+            "login",
             data={
                 "username": self.settings.xui_username,
                 "password": self.settings.xui_password.get_secret_value(),
@@ -205,6 +211,8 @@ class XuiClient:
 
     async def _request(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
         """Perform an authenticated request, retrying once after auth failures."""
+        url = url.lstrip("/")
+
         if self._api_token:
             response = await self._client.request(method, url, **kwargs)
             self._raise_for_status(response)
