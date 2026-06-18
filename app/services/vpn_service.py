@@ -102,6 +102,37 @@ class VpnService:
             return result
 
 
+
+    async def provision_trial_client(
+        self,
+        telegram_id: int,
+        hours: int = 2,
+    ) -> ProvisionResult:
+        """Create a one-time trial subscription without payment/referral side effects."""
+        if hours <= 0:
+            msg = "Trial access hours must be positive"
+            raise ValueError(msg)
+
+        if self.session is not None:
+            subscription = await SubscriptionRepository(
+                self.session
+            ).get_active_by_telegram_id(telegram_id)
+            if subscription is not None:
+                msg = f"Telegram user {telegram_id} already has an active subscription"
+                raise ValueError(msg)
+            return await self._create_trial_client(self.session, telegram_id, hours)
+
+        async with async_session_maker() as session:
+            subscription = await SubscriptionRepository(session).get_active_by_telegram_id(
+                telegram_id
+            )
+            if subscription is not None:
+                msg = f"Telegram user {telegram_id} already has an active subscription"
+                raise ValueError(msg)
+            result = await self._create_trial_client(session, telegram_id, hours)
+            await session.commit()
+            return result
+
     async def extend_active_subscription_by_days(
         self,
         telegram_id: int,
@@ -187,6 +218,111 @@ class VpnService:
             connection_link=connection_link,
             expires_at=expires_at,
             action="extended",
+            subscription_id=subscription.id,
+        )
+
+    async def _create_trial_client(
+        self,
+        session: AsyncSession,
+        telegram_id: int,
+        hours: int,
+    ) -> ProvisionResult:
+        """Provision a trial 3x-ui client and persist an active subscription."""
+        now = datetime.now(UTC)
+        user = await UserRepository(session).get_or_create(telegram_id)
+        client_id = str(uuid4())
+        sub_id = f"trial_tg_{telegram_id}_{token_hex(4)}"
+        email = sub_id
+        expires_at = now + timedelta(hours=hours)
+        expiry_ms = int(expires_at.timestamp() * 1000)
+        total_bytes = self.settings.xui_default_traffic_gb * 1024**3
+        client_payload = {
+            "id": client_id,
+            "email": email,
+            "subId": sub_id,
+            "tgId": telegram_id,
+            "expiryTime": expiry_ms,
+            "limitIp": self.settings.xui_default_limit_ip,
+            "totalGB": total_bytes,
+            "enable": True,
+        }
+
+        inbound_ids = self.settings.xui_inbound_ids
+        if not inbound_ids:
+            msg = "XUI_INBOUND_IDS must contain at least one inbound id"
+            raise ValueError(msg)
+        primary_inbound_id = inbound_ids[0]
+
+        xui_response = await self.xui_client.add_client(client_payload, inbound_ids)
+
+        provisioned_client = client_payload
+        provisioned_client_id = client_id
+        inbound_response: dict[str, Any] | None = None
+        inbound: dict[str, Any] = {}
+        protocol: Any = None
+        settings: dict[str, Any] = {}
+        stream_settings: dict[str, Any] = {}
+        diagnostic_subscription_link = self._extract_subscription_link(xui_response)
+
+        if self.settings.xui_sub_base_url:
+            connection_link = self._build_subscription_url(
+                self.settings.xui_sub_base_url,
+                sub_id,
+            )
+        else:
+            inbound_response = await self.xui_client.get_inbound(primary_inbound_id)
+            provisioned_client = self._find_inbound_client(inbound_response, email)
+            provisioned_client_id = self._extract_client_secret(provisioned_client, email)
+            inbound = self._extract_inbound_object(inbound_response)
+            protocol = inbound.get("protocol")
+            settings = self._extract_inbound_settings(inbound_response)
+            stream_settings = self._extract_inbound_stream_settings(inbound_response)
+            if diagnostic_subscription_link is None:
+                diagnostic_subscription_link = self._extract_subscription_link(
+                    inbound_response
+                )
+            connection_link = self._build_vless_uri(
+                client_secret=provisioned_client_id,
+                email=email,
+                inbound=inbound,
+                protocol=protocol,
+                app_settings=self.settings,
+                stream_settings=stream_settings,
+            )
+
+        subscription = await SubscriptionRepository(session).create_active(
+            user=user,
+            xui_client_id=provisioned_client_id,
+            xui_email=email,
+            inbound_id=primary_inbound_id,
+            expires_at=expires_at,
+            traffic_limit_gb=self.settings.xui_default_traffic_gb,
+            vpn_config={
+                "email": email,
+                "access_type": "trial",
+                "trial_hours": hours,
+                "trial_created_at": now.isoformat(),
+                "subId": sub_id,
+                "subscription_url": connection_link,
+                "inboundIds": inbound_ids,
+                "xui_response": xui_response,
+                "client": client_payload,
+                "provisioned_client": provisioned_client,
+                "inbound": {
+                    "protocol": protocol,
+                    "port": inbound.get("port"),
+                    "settings": settings,
+                    "streamSettings": stream_settings,
+                },
+                "inbound_response": inbound_response,
+                "diagnostic_subscription_link": diagnostic_subscription_link,
+                "connection_link": connection_link,
+            },
+        )
+        return ProvisionResult(
+            connection_link=connection_link,
+            expires_at=expires_at,
+            action="created",
             subscription_id=subscription.id,
         )
 

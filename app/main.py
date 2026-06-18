@@ -1,6 +1,7 @@
 """Application entry point."""
 
 import asyncio
+from datetime import UTC, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from html import escape
 
@@ -22,7 +23,7 @@ from aiogram.types import (
 
 from app.config import Settings
 from app.db.models import PaymentStatus
-from app.db.repositories import SubscriptionRepository
+from app.db.repositories import SubscriptionRepository, UserRepository
 from app.db.session import async_session_maker
 from app.services.benefit_service import BenefitService
 from app.services.payment_service import PaymentService
@@ -118,6 +119,15 @@ def tariff_keyboard(discount_percent: int = 0) -> InlineKeyboardMarkup:
                 )
             ]
             for months, label in TARIFFS.items()
+        ]
+    )
+
+
+def trial_access_keyboard() -> InlineKeyboardMarkup:
+    """Build inline keyboard for one-time trial access."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🧪 Получить тестовый доступ", callback_data="trial_access")]
         ]
     )
 
@@ -555,7 +565,17 @@ async def send_tariffs_screen(
         ).get_active_discount_percent(telegram_id)
 
     await state.set_state(PurchaseState.choosing_tariff)
-    await message.answer(text, reply_markup=tariff_keyboard(discount_percent))
+    keyboard = tariff_keyboard(discount_percent)
+    if subscription is None and settings.trial_access_enabled:
+        keyboard.inline_keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text=f"🧪 Тестовый доступ на {settings.trial_access_hours} ч",
+                    callback_data="trial_access",
+                )
+            ]
+        )
+    await message.answer(text, reply_markup=keyboard)
 
 
 @router.message(Command("renew"))
@@ -600,6 +620,99 @@ async def renew_subscription(
         callback.from_user.id,
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == "trial_access")
+async def trial_access(callback: CallbackQuery, settings: Settings) -> None:
+    """Provision one-time user trial access independent from TEST_MODE."""
+    if callback.from_user is None or not isinstance(callback.message, Message):
+        await callback.answer("Не удалось выдать тестовый доступ", show_alert=True)
+        return
+    if not settings.trial_access_enabled:
+        await callback.answer("Тестовый доступ сейчас недоступен", show_alert=True)
+        return
+
+    telegram_user = callback.from_user
+    async with async_session_maker() as session:
+        user_repo = UserRepository(session)
+        user = await user_repo.get_or_create_from_telegram(telegram_user)
+        if user.trial_used_at is not None:
+            await callback.message.edit_reply_markup(reply_markup=None)
+            await session.commit()
+            await callback.answer("Тестовый доступ уже использован", show_alert=True)
+            return
+
+        active_subscription = await SubscriptionRepository(
+            session
+        ).get_active_by_telegram_id(telegram_user.id)
+        if active_subscription is not None:
+            await callback.message.edit_reply_markup(reply_markup=None)
+            await session.commit()
+            await callback.answer("У вас уже есть активный доступ", show_alert=True)
+            return
+
+        vpn_service = VpnService(settings=settings, session=session)
+        try:
+            provision_result = await vpn_service.provision_trial_client(
+                telegram_id=telegram_user.id,
+                hours=settings.trial_access_hours,
+            )
+        except XuiError as error:
+            await session.rollback()
+            await notify_admins(
+                callback.bot,
+                settings,
+                format_access_error_alert(error, user_id=telegram_user.id),
+            )
+            await callback.message.answer(
+                PROVISIONING_USER_ERROR,
+                reply_markup=main_menu_keyboard(),
+            )
+            await callback.answer("Техническая ошибка", show_alert=True)
+            return
+        except (RuntimeError, ValueError) as error:
+            await session.rollback()
+            await notify_admins(
+                callback.bot,
+                settings,
+                format_access_error_alert(error, user_id=telegram_user.id),
+            )
+            await callback.message.answer(
+                PROVISIONING_USER_ERROR,
+                reply_markup=main_menu_keyboard(),
+            )
+            await callback.answer("Техническая ошибка", show_alert=True)
+            return
+        except Exception as error:
+            await session.rollback()
+            await notify_admins(
+                callback.bot,
+                settings,
+                format_access_error_alert(error, user_id=telegram_user.id),
+            )
+            await callback.message.answer(
+                PROVISIONING_USER_ERROR,
+                reply_markup=main_menu_keyboard(),
+            )
+            await callback.answer("Техническая ошибка", show_alert=True)
+            return
+        finally:
+            await vpn_service.close()
+
+        user.trial_used_at = datetime.now(UTC)
+        user.trial_subscription_id = provision_result.subscription_id
+        session.add(user)
+        await session.commit()
+
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(
+        "Тестовый доступ выдан ✅\n\n"
+        f"Действует до: <code>{format_provision_expires(provision_result)}</code>\n\n"
+        "Ваша ссылка для защищённого соединения:\n"
+        f"<code>{escape(provision_result.connection_link)}</code>",
+        reply_markup=main_menu_keyboard(),
+    )
+    await callback.answer("Тестовый доступ выдан")
 
 
 @router.callback_query(

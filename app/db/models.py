@@ -69,9 +69,17 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+    trial_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    trial_subscription_id: Mapped[int | None] = mapped_column(
+        ForeignKey("subscriptions.id", ondelete="SET NULL"), nullable=True
+    )
 
     subscriptions: Mapped[list["Subscription"]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
+        back_populates="user",
+        cascade="all, delete-orphan",
+        foreign_keys="Subscription.user_id",
     )
     payments: Mapped[list["Payment"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
@@ -267,7 +275,9 @@ class Subscription(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
-    user: Mapped[User] = relationship(back_populates="subscriptions")
+    user: Mapped[User] = relationship(
+        back_populates="subscriptions", foreign_keys=[user_id]
+    )
     payments: Mapped[list["Payment"]] = relationship(back_populates="subscription")
     notifications: Mapped[list["SubscriptionNotification"]] = relationship(
         back_populates="subscription", cascade="all, delete-orphan"
