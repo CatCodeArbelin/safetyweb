@@ -10,7 +10,7 @@ from app.config import Settings
 from app.db.models import Referral, ReferralCode, ReferralReward, User
 from app.db.repositories import UserRepository
 from app.db.session import async_session_maker
-from app.services.vpn_service import VpnService
+from app.services.vpn_service import NoActiveSubscriptionError, VpnService
 
 
 class ReferralService:
@@ -63,6 +63,18 @@ class ReferralService:
             rewards = await self._apply_first_payment_rewards(
                 session, referred_telegram_id, paid_months
             )
+            await session.commit()
+            return rewards
+
+    async def apply_pending_rewards(self, telegram_id: int) -> list[ReferralReward]:
+        """Apply unapplied referral rewards to a user's active subscription."""
+        if not self.settings.referral_enabled:
+            return []
+        if self.session is not None:
+            return await self._apply_pending_rewards(self.session, telegram_id)
+
+        async with async_session_maker() as session:
+            rewards = await self._apply_pending_rewards(session, telegram_id)
             await session.commit()
             return rewards
 
@@ -204,19 +216,6 @@ class ReferralService:
         if recipient is None:
             return None
 
-        owns_vpn_service = self.vpn_service is None
-        vpn_service = self.vpn_service or VpnService(settings=self.settings, session=session)
-        try:
-            await vpn_service.extend_active_subscription_by_days(
-                recipient.telegram_id,
-                bonus_days,
-                reason=f"referral:{reward_type}",
-            )
-        except ValueError:
-            return None
-        finally:
-            if owns_vpn_service:
-                await vpn_service.close()
         reward = ReferralReward(
             referral_id=referral.id,
             recipient_user_id=recipient_user_id,
@@ -226,4 +225,55 @@ class ReferralService:
         )
         session.add(reward)
         await session.flush()
+
+        applied = await self._apply_reward_to_active_subscription(session, reward, recipient)
+        if applied:
+            await session.flush()
         return reward
+
+    async def _apply_pending_rewards(
+        self, session: AsyncSession, telegram_id: int
+    ) -> list[ReferralReward]:
+        recipient = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+        if recipient is None:
+            return []
+
+        rewards = list(
+            (
+                await session.scalars(
+                    select(ReferralReward)
+                    .where(
+                        ReferralReward.recipient_user_id == recipient.id,
+                        ReferralReward.applied_at.is_(None),
+                    )
+                    .order_by(ReferralReward.created_at, ReferralReward.id)
+                )
+            ).all()
+        )
+        applied_rewards: list[ReferralReward] = []
+        for reward in rewards:
+            if await self._apply_reward_to_active_subscription(session, reward, recipient):
+                applied_rewards.append(reward)
+        await session.flush()
+        return applied_rewards
+
+    async def _apply_reward_to_active_subscription(
+        self, session: AsyncSession, reward: ReferralReward, recipient: User
+    ) -> bool:
+        owns_vpn_service = self.vpn_service is None
+        vpn_service = self.vpn_service or VpnService(settings=self.settings, session=session)
+        try:
+            await vpn_service.extend_active_subscription_by_days(
+                recipient.telegram_id,
+                reward.bonus_days,
+                reason=reward.reason,
+            )
+        except NoActiveSubscriptionError:
+            return False
+        finally:
+            if owns_vpn_service:
+                await vpn_service.close()
+
+        reward.applied_at = datetime.now(UTC)
+        session.add(reward)
+        return True
