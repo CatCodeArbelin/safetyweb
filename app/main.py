@@ -1,6 +1,7 @@
 """Application entry point."""
 
 import asyncio
+from decimal import Decimal
 from html import escape
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -21,6 +22,7 @@ from aiogram.types import (
 
 from app.config import Settings
 from app.db.models import PaymentStatus
+from app.services.benefit_service import BenefitService
 from app.services.payment_service import PaymentService
 from app.services.subscription_service import SubscriptionService
 from app.services.vpn_service import ProvisionResult, VpnService
@@ -139,6 +141,27 @@ def format_tariffs() -> str:
         price_text = f"{price} ₽" if price else "уточняйте у поддержки"
         lines.append(f"{emoji} {label} — {price_text}")
     return "\n".join(lines)
+
+
+def format_price(value: Decimal | int | str) -> str:
+    """Format ruble prices for Telegram messages."""
+    price = Decimal(str(value))
+    if price == price.to_integral_value():
+        return f"{int(price)} ₽"
+    return f"{price:.2f} ₽"
+
+
+def format_discount_summary(
+    base_price: Decimal | int | str,
+    discount_percent: int,
+    final_price: Decimal | int | str,
+) -> str:
+    """Format base price, discount, and final price for payment messages."""
+    return (
+        f"Базовая цена: <code>{format_price(base_price)}</code>\n"
+        f"Скидка: <code>{discount_percent}%</code>\n"
+        f"Итого к оплате: <code>{format_price(final_price)}</code>"
+    )
 
 
 def payment_request_keyboard(months: int, test_mode: bool = False) -> InlineKeyboardMarkup:
@@ -326,11 +349,17 @@ async def create_payment_request(
         await callback.answer("Тестовый доступ выдан")
         return
 
+    benefit_service = BenefitService(settings=settings)
+    base_price = TARIFF_PRICES[months]
+    discount_percent = await benefit_service.get_active_discount_percent(user.id)
+    final_price = await benefit_service.apply_price_discount(user.id, base_price)
+    discount_summary = format_discount_summary(base_price, discount_percent, final_price)
+
     payment_service = PaymentService()
     payment = await payment_service.create_payment(
         user_id=user.id,
         tariff_id=months,
-        amount=TARIFF_PRICES[months],
+        amount=final_price,
         currency=PAYMENT_CURRENCY,
     )
     await state.update_data(months=months, payment_id=payment.provider_payment_id)
@@ -341,7 +370,8 @@ async def create_payment_request(
         f"Username: @{escape(user.username) if user.username else '—'}\n"
         f"Тариф: <b>{TARIFFS[months]}</b>\n"
         f"Платёж: <code>{payment.provider_payment_id}</code>\n"
-        f"Сумма: <code>{payment.amount} {payment.currency}</code>"
+        f"{discount_summary}\n"
+        f"Сумма платежа: <code>{payment.amount} {payment.currency}</code>"
     )
 
     for admin_id in settings.admin_ids:
@@ -354,7 +384,8 @@ async def create_payment_request(
     await state.clear()
     await callback.message.answer(
         "Заявка создана. После проверки оплаты администратор подтвердит её, "
-        "и бот отправит вам ссылку для защищённого соединения.",
+        "и бот отправит вам ссылку для защищённого соединения.\n\n"
+        f"{discount_summary}",
         reply_markup=main_menu_keyboard(),
     )
     await callback.answer("Заявка отправлена")
@@ -396,13 +427,36 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
     await payment_service.attach_subscription(
         provider_payment_id, provision_result.subscription_id
     )
+    benefit_granted = (
+        await BenefitService(settings=settings).grant_early_buyer_discount_if_eligible(user_id)
+    )
+    paid_base_price = Decimal(str(TARIFF_PRICES.get(months, payment.amount)))
+    paid_amount = Decimal(str(payment.amount))
+    paid_discount = paid_base_price - paid_amount
+    paid_discount_percent = (
+        int((paid_discount * Decimal(100) / paid_base_price).quantize(Decimal("1")))
+        if paid_base_price
+        else 0
+    )
+    paid_discount_summary = format_discount_summary(
+        paid_base_price,
+        paid_discount_percent,
+        paid_amount,
+    )
+    benefit_granted_text = (
+        "Вам выдана скидка раннего покупателя для следующих оплат 🎁\n\n"
+        if benefit_granted
+        else ""
+    )
 
     await callback.bot.send_message(
         user_id,
         "Оплата подтверждена ✅\n\n"
         f"{'Доступ создан' if provision_result.action == 'created' else 'Подписка продлена'} "
         f"на тариф <b>{TARIFFS.get(months, f'{months} мес.')}</b>.\n"
+        f"{paid_discount_summary}\n"
         f"Действует до: <code>{format_provision_expires(provision_result)}</code>\n\n"
+        f"{benefit_granted_text}"
         f"Ваша ссылка для защищённого соединения:\n"
         f"<code>{escape(provision_result.connection_link)}</code>",
     )
@@ -413,7 +467,9 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
     )
     await callback.message.edit_text(
         f"Оплата подтверждена: {admin_action_text}. "
-        f"Ссылка для защищённого соединения отправлена пользователю <code>{user_id}</code>."
+        f"Ссылка для защищённого соединения отправлена пользователю <code>{user_id}</code>.\n"
+        f"{paid_discount_summary}\n"
+        f"Скидка раннего покупателя выдана: <code>{'да' if benefit_granted else 'нет'}</code>"
     )
     await callback.answer("Оплата подтверждена")
 

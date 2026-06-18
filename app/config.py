@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     xui_default_traffic_gb: int = 0
     xui_default_limit_ip: int = 1
     test_mode: bool = False
+    early_buyer_discount_enabled: bool = True
+    early_buyer_limit: int = 100
+    early_buyer_discount_percent: int = 15
     service_name: str = "ЛадНет"
     service_display_name: str = "🌏 ЛадНет | Безопасный Интернет"
     bot_public_url: str = "https://t.me/LadnetBot"

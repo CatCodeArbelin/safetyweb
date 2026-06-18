@@ -76,6 +76,36 @@ class User(Base):
     payments: Mapped[list["Payment"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    benefits: Mapped[list["CustomerBenefit"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class CustomerBenefit(Base):
+    """Customer-specific promotional benefit."""
+
+    __tablename__ = "customer_benefits"
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "benefit_type", name="uq_customer_benefits_user_type"),
+        CheckConstraint(
+            "discount_percent BETWEEN 0 AND 100",
+            name="ck_customer_benefits_discount_percent",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    benefit_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    discount_percent: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True, server_default="true", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    user: Mapped[User] = relationship(back_populates="benefits")
 
 
 class VpnNode(Base):
