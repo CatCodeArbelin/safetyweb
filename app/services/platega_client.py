@@ -61,8 +61,8 @@ class PlategaClient:
             "failedUrl": failed_url or self.settings.platega_failed_url,
             "payload": payload or {},
             "metadata": {
-                "userId": user_id,
-                "userName": user_name or "",
+                "userId": str(user_id),
+                "userName": user_name or str(user_id),
             },
         }
 
