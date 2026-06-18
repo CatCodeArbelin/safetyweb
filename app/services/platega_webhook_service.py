@@ -93,17 +93,19 @@ class PlategaWebhookService:
                 event.payment_id = payment.id
 
             status = self._normalize_status(event.event_status)
+            months = payment.tariff_months
+            verified_transaction: dict[str, Any] | None = None
             if status in self.PAID_STATUSES:
                 months = self._extract_months(event, payment.tariff_months)
                 await session.commit()
                 client = self.client or PlategaClient(settings=self.settings)
                 try:
-                    transaction = await client.get_transaction(provider_payment_id)
+                    verified_transaction = await client.get_transaction(provider_payment_id)
                 finally:
                     if self.client is None:
                         await client.close()
                 transaction_status = self._normalize_status(
-                    self._extract_transaction_status(transaction) or event.event_status
+                    self._extract_transaction_status(verified_transaction) or event.event_status
                 )
                 if transaction_status not in self.PAID_STATUSES:
                     msg = (
@@ -117,44 +119,21 @@ class PlategaWebhookService:
                         )
                         await failed_session.commit()
                     return
-                await PaymentFinalizationService(
-                    settings=self.settings,
-                    bot=self.bot,
-                ).finalize_paid_payment(provider_payment_id, months)
-                async with async_session_maker() as final_session:
-                    await PaymentRepository(final_session).mark_webhook_processed(
+
+            processed = await self.process_transaction_status(
+                provider_payment_id,
+                event.event_status,
+                months=months,
+                status_reason_prefix="Platega webhook status",
+                transaction=verified_transaction,
+            )
+            if processed:
+                async with async_session_maker() as processed_session:
+                    await PaymentRepository(processed_session).mark_webhook_processed(
                         webhook_event_id,
                         datetime.now(tz=UTC),
                     )
-                    await final_session.commit()
-                return
-
-            if status == self.CHARGEBACK_STATUS:
-                payment.status = PaymentStatus.REFUNDED
-                payment.status_reason = "chargebacked"
-                await repository.mark_webhook_processed(
-                    webhook_event_id,
-                    datetime.now(tz=UTC),
-                )
-                await session.commit()
-                await self._notify_admins(
-                    "Получен chargeback по Platega-платежу\n"
-                    f"Payment ID: <code>{escape(provider_payment_id)}</code>\n"
-                    "Подписка не отключалась автоматически.",
-                )
-                return
-
-            if status in self.FAILED_STATUSES:
-                if payment.status != PaymentStatus.PAID:
-                    payment.status = PaymentStatus.FAILED
-                    payment.status_reason = (
-                        f"Platega webhook status: {event.event_status}"
-                    )
-                await repository.mark_webhook_processed(
-                    webhook_event_id,
-                    datetime.now(tz=UTC),
-                )
-                await session.commit()
+                    await processed_session.commit()
                 return
 
             await repository.mark_webhook_processed(
@@ -162,6 +141,61 @@ class PlategaWebhookService:
                 datetime.now(tz=UTC),
             )
             await session.commit()
+
+    async def process_transaction_status(
+        self,
+        provider_payment_id: str,
+        status: str | None,
+        *,
+        months: int | None = None,
+        status_reason_prefix: str = "Platega transaction status",
+        transaction: dict[str, Any] | None = None,
+    ) -> bool:
+        """Apply a Platega transaction status using the shared payment processor."""
+        normalized_status = self._normalize_status(
+            self._extract_transaction_status(transaction or {}) or status
+        )
+        async with async_session_maker() as session:
+            repository = PaymentRepository(session)
+            payment = await repository.get_by_provider_payment_id_for_update(
+                PLATEGA_PROVIDER_NAME,
+                provider_payment_id,
+            )
+            if payment is None:
+                return False
+
+            if normalized_status in self.PAID_STATUSES:
+                payment_months = months or payment.tariff_months
+                if not payment_months:
+                    msg = f"Cannot determine tariff months for Platega payment {payment.id}"
+                    raise ValueError(msg)
+                await session.commit()
+                await PaymentFinalizationService(
+                    settings=self.settings,
+                    bot=self.bot,
+                ).finalize_paid_payment(provider_payment_id, payment_months)
+                return True
+
+            if normalized_status == self.CHARGEBACK_STATUS:
+                payment.status = PaymentStatus.REFUNDED
+                payment.status_reason = "chargebacked"
+                await session.commit()
+                await self._notify_admins(
+                    "Получен chargeback по Platega-платежу\n"
+                    f"Payment ID: <code>{escape(provider_payment_id)}</code>\n"
+                    "Подписка не отключалась автоматически.",
+                )
+                return True
+
+            if normalized_status in self.FAILED_STATUSES:
+                if payment.status != PaymentStatus.PAID:
+                    payment.status = PaymentStatus.FAILED
+                    payment.status_reason = f"{status_reason_prefix}: {status}"
+                await session.commit()
+                return True
+
+            await session.commit()
+            return True
 
     def _extract_months(
         self, event: PaymentWebhookEvent, payment_tariff_months: int | None
