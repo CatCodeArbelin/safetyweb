@@ -543,6 +543,19 @@ async def send_tariffs_screen(
 
 
 @router.message(Command("renew"))
+async def renew_command(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+) -> None:
+    """Show renewal-aware tariffs from the renew bot command."""
+    if message.from_user is None:
+        await message.answer("Не удалось определить пользователя.")
+        return
+
+    await send_tariffs_screen(message, state, settings, message.from_user.id)
+
+
 @router.message(F.text == BTN_BUY_ACCESS)
 async def show_tariffs(
     message: Message,
@@ -550,11 +563,7 @@ async def show_tariffs(
     settings: Settings,
 ) -> None:
     """Show available tariffs."""
-    if message.from_user is None:
-        await message.answer("Не удалось определить пользователя.")
-        return
-
-    await send_tariffs_screen(message, state, settings, message.from_user.id)
+    await renew_command(message, state, settings)
 
 
 @router.callback_query(F.data == "renew")
