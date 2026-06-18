@@ -225,38 +225,65 @@ class PlategaWebhookService:
             if payment is None:
                 return False
 
+            sanitized_transaction = self._sanitize_transaction(transaction or {})
+            payment.provider_data = {
+                **(payment.provider_data or {}),
+                "last_status_response": sanitized_transaction,
+            }
+            provider_payment_method = self._extract_provider_payment_method(
+                transaction or {}
+            )
+            if provider_payment_method is not None:
+                payment.provider_payment_method = provider_payment_method
+
             if mapped_status == PaymentStatus.PAID:
                 payment_months = months or payment.tariff_months
                 if not payment_months:
                     msg = f"Cannot determine tariff months for Platega payment {payment.id}"
                     raise ValueError(msg)
+                payment.status = PaymentStatus.PAID
+                payment.paid_at = payment.paid_at or datetime.now(tz=UTC)
+                payment.status_reason = f"{status_reason_prefix}: {transaction_status}"
                 await session.commit()
                 await PaymentFinalizationService(
                     settings=self.settings,
                     bot=self.bot,
-                ).finalize_paid_payment(provider_payment_id, payment_months)
+                ).finalize_paid_payment(
+                    provider="platega",
+                    provider_payment_id=provider_payment_id,
+                    source="platega_webhook",
+                )
                 return True
 
             if mapped_status == PaymentStatus.REFUNDED:
                 payment.status = PaymentStatus.REFUNDED
-                payment.status_reason = "chargebacked"
+                payment.status_reason = f"{status_reason_prefix}: {transaction_status}"
                 await session.commit()
                 await self._notify_admins(
-                    "Получен chargeback по Platega-платежу\n"
+                    "Получен возврат/chargeback по Platega-платежу\n"
                     f"Payment ID: <code>{escape(provider_payment_id)}</code>\n"
                     "Подписка не отключалась автоматически.",
                 )
                 return True
 
             if mapped_status == PaymentStatus.FAILED:
-                if payment.status != PaymentStatus.PAID:
-                    payment.status = PaymentStatus.FAILED
-                    payment.status_reason = (
-                        f"{status_reason_prefix}: {transaction_status}"
+                if payment.status == PaymentStatus.PAID:
+                    await session.commit()
+                    await self._notify_admins(
+                        "Platega прислала failed для уже оплаченного платежа\n"
+                        f"Payment ID: <code>{escape(provider_payment_id)}</code>\n"
+                        f"Статус Platega: <code>{escape(str(transaction_status))}</code>\n"
+                        "Локальный статус paid не откатывался.",
                     )
+                    return True
+
+                payment.status = PaymentStatus.FAILED
+                payment.status_reason = f"{status_reason_prefix}: {transaction_status}"
                 await session.commit()
                 return True
 
+            payment.status = PaymentStatus.PENDING
+            payment.status_reason = f"{status_reason_prefix}: {transaction_status}"
             await session.commit()
             return True
 
@@ -472,6 +499,23 @@ class PlategaWebhookService:
             if isinstance(nested, dict):
                 values.extend(cls._candidate_values(nested, *keys))
         return values
+
+    @classmethod
+    def _extract_provider_payment_method(cls, data: dict[str, Any]) -> str | None:
+        for value in cls._candidate_values(
+            data,
+            "paymentMethod",
+            "payment_method",
+            "method",
+            "paymentMethodType",
+            "payment_method_type",
+        ):
+            if value is None:
+                continue
+            method = str(value).strip()
+            if method:
+                return method
+        return None
 
     @classmethod
     def _extract_transaction_id(cls, data: dict[str, Any]) -> str | None:
