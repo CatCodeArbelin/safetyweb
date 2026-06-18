@@ -27,7 +27,11 @@ from app.services.payment_service import PaymentService
 from app.services.referral_service import ReferralService
 from app.services.stats_service import AdminStats, StatsService
 from app.services.subscription_service import SubscriptionService
-from app.services.vpn_service import ProvisionResult, VpnService
+from app.services.vpn_service import (
+    NoActiveSubscriptionError,
+    ProvisionResult,
+    VpnService,
+)
 from app.services.xui_client import XuiClient, XuiError
 from app.tasks.scheduler import create_scheduler
 
@@ -126,6 +130,25 @@ def docs_keyboard(settings: Settings) -> InlineKeyboardMarkup:
 def format_provision_expires(result: ProvisionResult) -> str:
     """Format provision expiry timestamp for bot messages."""
     return escape(result.expires_at.strftime("%Y-%m-%d %H:%M UTC"))
+
+
+async def notify_admins_about_provisioning_error(
+    bot: Bot,
+    settings: Settings,
+    context: str,
+    error: Exception,
+) -> None:
+    """Notify administrators about provisioning failures."""
+    error_text = escape(str(error))
+    context_text = escape(context)
+    for admin_id in settings.admin_ids:
+        await bot.send_message(
+            admin_id,
+            "Ошибка при изменении цифрового доступа.\n\n"
+            f"Контекст: <code>{context_text}</code>\n"
+            f"Ошибка: <code>{error_text}</code>",
+        )
+
 
 def support_contact_text(settings: Settings) -> str:
     """Format support contact information for bot messages."""
@@ -296,6 +319,81 @@ async def stats_command(message: Message, settings: Settings) -> None:
 
     stats = await StatsService().get_admin_stats()
     await message.answer(format_admin_stats(stats, settings.early_buyer_limit))
+
+
+@router.message(Command("add_days"))
+async def add_days_command(
+    message: Message,
+    command: CommandObject,
+    settings: Settings,
+) -> None:
+    """Manually extend an active subscription by days for administrators."""
+    if message.from_user is None or message.from_user.id not in settings.admin_ids:
+        await message.answer("Недостаточно прав.")
+        return
+
+    args = (command.args or "").split(maxsplit=2)
+    if len(args) < 2:
+        await message.answer(
+            "Использование: <code>/add_days &lt;telegram_id&gt; &lt;days&gt; [reason]</code>"
+        )
+        return
+
+    telegram_id_raw, days_raw = args[0], args[1]
+    reason = args[2] if len(args) > 2 else "manual"
+    try:
+        telegram_id = int(telegram_id_raw)
+    except ValueError:
+        await message.answer("Telegram ID должен быть целым числом.")
+        return
+
+    try:
+        days = int(days_raw)
+    except ValueError:
+        await message.answer("Количество дней должно быть целым числом больше 0.")
+        return
+
+    if days <= 0:
+        await message.answer("Количество дней должно быть больше 0.")
+        return
+
+    vpn_service = VpnService(settings=settings)
+    try:
+        provision_result = await vpn_service.extend_active_subscription_by_days(
+            telegram_id=telegram_id,
+            days=days,
+            reason=reason,
+        )
+    except NoActiveSubscriptionError:
+        await message.answer(
+            f"Активная подписка для пользователя <code>{telegram_id}</code> не найдена."
+        )
+        return
+    except Exception as error:
+        await notify_admins_about_provisioning_error(
+            message.bot,
+            settings,
+            f"/add_days telegram_id={telegram_id} days={days} reason={reason}",
+            error,
+        )
+        await message.answer("Не удалось изменить срок доступа. Администраторы уведомлены.")
+        return
+    finally:
+        await vpn_service.close()
+
+    await message.answer(
+        "Срок цифрового доступа изменён.\n\n"
+        f"Пользователь: <code>{telegram_id}</code>\n"
+        f"Добавлено дней: <code>{days}</code>\n"
+        f"Действует до: <code>{format_provision_expires(provision_result)}</code>"
+    )
+    await message.bot.send_message(
+        telegram_id,
+        "Срок вашего цифрового доступа изменён.\n\n"
+        f"Добавлено дней: <code>{days}</code>\n"
+        f"Действует до: <code>{format_provision_expires(provision_result)}</code>\n\n"
+        "Ссылка для защищённого соединения остаётся прежней.",
+    )
 
 
 @router.message(Command("subscription"))

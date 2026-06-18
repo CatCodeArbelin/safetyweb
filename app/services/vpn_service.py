@@ -31,6 +31,10 @@ class ProvisionResult:
     subscription_id: int
 
 
+class NoActiveSubscriptionError(ValueError):
+    """Raised when a requested active subscription does not exist."""
+
+
 class VpnService:
     """Coordinate protected access account provisioning and updates."""
 
@@ -108,7 +112,7 @@ class VpnService:
             ).get_active_by_telegram_id(telegram_id)
             if subscription is None:
                 msg = f"Active subscription for Telegram user {telegram_id} was not found"
-                raise ValueError(msg)
+                raise NoActiveSubscriptionError(msg)
             return await self._extend_active_subscription_by_days(
                 self.session, subscription, days, reason
             )
@@ -119,7 +123,7 @@ class VpnService:
             )
             if subscription is None:
                 msg = f"Active subscription for Telegram user {telegram_id} was not found"
-                raise ValueError(msg)
+                raise NoActiveSubscriptionError(msg)
             result = await self._extend_active_subscription_by_days(
                 session, subscription, days, reason
             )
