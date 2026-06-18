@@ -356,12 +356,15 @@ async def start(
     trial_available = False
     if telegram_id is not None:
         async with async_session_maker() as session:
-            await UserRepository(session).get_or_create_from_telegram(message.from_user)
+            _, user_created = await UserRepository(
+                session
+            ).get_or_create_from_telegram(message.from_user)
             await session.commit()
 
-        benefit_granted = await BenefitService(
-            settings=settings
-        ).grant_early_buyer_discount_on_start_if_eligible(telegram_id)
+        if user_created:
+            benefit_granted = await BenefitService(
+                settings=settings
+            ).grant_early_buyer_discount_on_start_if_eligible(telegram_id)
         trial_available = await is_trial_available(telegram_id, settings)
 
     welcome_text = (
@@ -398,12 +401,10 @@ async def help_command(message: Message, settings: Settings) -> None:
     await message.answer(
         "Помощь по сервису ЛадНет:\n\n"
         "• 🛒 Оформить / продлить — выбрать тариф и создать заявку на оплату.\n"
-        "• 📅 Моя подписка — проверить активный доступ.\n"
-        "• 🔗 Моя ссылка — получить ссылку для защищённого соединения (/link).\n"
+        "• 👤 Мой профиль — подписка, ссылка, документы и продление.\n"
         "• 🎁 Пригласить друга — получить реферальную ссылку для приглашения.\n"
         "• 📲 Инструкция — открыть краткую инструкцию по настройке.\n"
-        "• 💬 Поддержка — посмотреть контакты поддержки.\n"
-        "• 📄 Документы — политика, соглашение, тарифы и условия оплаты.\n\n"
+        "• 💬 Поддержка — посмотреть контакты поддержки.\n\n"
         f"{support_contact_text(settings)}",
         reply_markup=main_menu_keyboard(),
     )
@@ -625,7 +626,8 @@ async def send_tariffs_screen(
 
     await state.set_state(PurchaseState.choosing_tariff)
     keyboard = tariff_keyboard(discount_percent)
-    if subscription is None and settings.trial_access_enabled:
+    trial_available = await is_trial_available(telegram_id, settings)
+    if trial_available:
         keyboard.inline_keyboard.append(
             [
                 InlineKeyboardButton(
@@ -694,7 +696,7 @@ async def trial_access(callback: CallbackQuery, settings: Settings) -> None:
     telegram_user = callback.from_user
     async with async_session_maker() as session:
         user_repo = UserRepository(session)
-        user = await user_repo.get_or_create_from_telegram(telegram_user)
+        user, _ = await user_repo.get_or_create_from_telegram(telegram_user)
         if user.trial_used_at is not None:
             await callback.message.edit_reply_markup(reply_markup=None)
             await session.commit()
@@ -877,6 +879,21 @@ async def create_payment_request(
             return
         finally:
             await vpn_service.close()
+
+        if settings.test_mode_referral_rewards_enabled:
+            try:
+                await ReferralService(settings=settings).apply_first_payment_rewards(
+                    user.id, months
+                )
+            except Exception as error:
+                await notify_admins(
+                    bot,
+                    settings,
+                    "Ошибка начисления реферального бонуса в TEST_MODE\n"
+                    f"Пользователь: <code>{user.id}</code>\n"
+                    f"Месяцев: <code>{months}</code>\n"
+                    f"Ошибка: <code>{escape(str(error))}</code>",
+                )
 
         await state.clear()
         await callback.message.answer(
@@ -1259,6 +1276,7 @@ async def profile_documents(callback: CallbackQuery, settings: Settings) -> None
     await callback.answer()
 
 
+@router.message(Command("admin"))
 @router.message(F.text == "Админ")
 async def admin_menu(message: Message, settings: Settings) -> None:
     """Show MVP admin menu entry point."""

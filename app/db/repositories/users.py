@@ -35,10 +35,20 @@ class UserRepository:
         await self.session.flush()
         return user
 
-    async def get_or_create_from_telegram(self, telegram_user: TelegramUser) -> User:
-        """Upsert user fields from aiogram's Telegram user object."""
-        return await self.get_or_create(
-            telegram_user.id,
-            username=telegram_user.username,
-            first_name=telegram_user.first_name,
-        )
+    async def get_or_create_from_telegram(
+        self, telegram_user: TelegramUser
+    ) -> tuple[User, bool]:
+        """Upsert user fields from aiogram's Telegram user object.
+
+        Returns the user and whether it was created during this call.
+        """
+        user = await self.get_by_telegram_id(telegram_user.id)
+        created = user is None
+        if user is None:
+            user = User(telegram_id=telegram_user.id)
+            self.session.add(user)
+
+        user.username = telegram_user.username
+        user.first_name = telegram_user.first_name
+        await self.session.flush()
+        return user, created
