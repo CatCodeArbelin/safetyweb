@@ -73,25 +73,54 @@ class PlategaWebhookService:
                 return
 
             provider_payment_id = event.provider_payment_id
-            payment = None
-            if provider_payment_id:
-                payment = await repository.get_by_provider_payment_id_for_update(
-                    PLATEGA_PROVIDER_NAME,
-                    provider_payment_id,
-                )
-
-            if payment is None and event.payment_id is not None:
-                payment = await repository.get_for_update(event.payment_id)
-                if payment is not None and payment.provider == PLATEGA_PROVIDER_NAME:
-                    provider_payment_id = payment.provider_payment_id
-                else:
-                    payment = None
-
             if not provider_payment_id:
                 msg = "Platega webhook event does not contain provider payment id"
                 await repository.mark_webhook_failed(webhook_event_id, msg)
                 await session.commit()
                 return
+
+            await session.commit()
+            client = self.client or PlategaClient(settings=self.settings)
+            try:
+                verified_transaction = await client.get_transaction(provider_payment_id)
+            finally:
+                if self.client is None:
+                    await client.close()
+
+            transaction_id = self._extract_transaction_id(verified_transaction)
+            if transaction_id != provider_payment_id:
+                msg = (
+                    "Platega transaction id mismatch: "
+                    f"webhook={provider_payment_id!r}, transaction={transaction_id!r}"
+                )
+                async with async_session_maker() as failed_session:
+                    await PaymentRepository(failed_session).mark_webhook_failed(
+                        webhook_event_id,
+                        msg,
+                    )
+                    await failed_session.commit()
+                await self._notify_admins(
+                    "Platega webhook transaction id mismatch\n"
+                    f"Webhook event ID: <code>{webhook_event_id}</code>\n"
+                    f"Webhook payment ID: <code>{escape(provider_payment_id)}</code>\n"
+                    f"Transaction ID: <code>{escape(str(transaction_id))}</code>",
+                )
+                return
+
+            transaction_status = self._extract_transaction_status(verified_transaction)
+            event_payment_id = event.payment_id
+
+        async with async_session_maker() as session:
+            repository = PaymentRepository(session)
+            payment = await repository.get_by_provider_payment_id_for_update(
+                PLATEGA_PROVIDER_NAME,
+                provider_payment_id,
+            )
+
+            if payment is None and event_payment_id is not None:
+                payment = await repository.get_for_update(event_payment_id)
+                if payment is None or payment.provider != PLATEGA_PROVIDER_NAME:
+                    payment = None
 
             if payment is None:
                 msg = f"Platega payment {provider_payment_id!r} was not found"
@@ -99,60 +128,37 @@ class PlategaWebhookService:
                 await session.commit()
                 return
 
-            if event.payment_id is None:
-                event.payment_id = payment.id
-            if event.provider_payment_id is None:
-                event.provider_payment_id = provider_payment_id
-
-            status = self._normalize_status(event.event_status)
+            db_event = await repository.get_webhook_event(webhook_event_id)
+            if db_event is not None:
+                if db_event.payment_id is None:
+                    db_event.payment_id = payment.id
+                if db_event.provider_payment_id is None:
+                    db_event.provider_payment_id = provider_payment_id
             months = payment.tariff_months
-            verified_transaction: dict[str, Any] | None = None
-            if status in self.PAID_STATUSES:
-                months = self._extract_months(event, payment.tariff_months)
-                await session.commit()
-                client = self.client or PlategaClient(settings=self.settings)
-                try:
-                    verified_transaction = await client.get_transaction(provider_payment_id)
-                finally:
-                    if self.client is None:
-                        await client.close()
-                transaction_status = self._normalize_status(
-                    self._extract_transaction_status(verified_transaction) or event.event_status
+            await session.commit()
+
+        processed = await self.process_transaction_status(
+            provider_payment_id,
+            transaction_status,
+            months=months,
+            status_reason_prefix="Platega transaction status",
+            transaction=verified_transaction,
+        )
+        if processed:
+            async with async_session_maker() as processed_session:
+                await PaymentRepository(processed_session).mark_webhook_processed(
+                    webhook_event_id,
+                    datetime.now(tz=UTC),
                 )
-                if transaction_status not in self.PAID_STATUSES:
-                    msg = (
-                        "Platega transaction status is not successful: "
-                        f"{transaction_status}"
-                    )
-                    async with async_session_maker() as failed_session:
-                        await PaymentRepository(failed_session).mark_webhook_failed(
-                            webhook_event_id,
-                            msg,
-                        )
-                        await failed_session.commit()
-                    return
+                await processed_session.commit()
+            return
 
-            processed = await self.process_transaction_status(
-                provider_payment_id,
-                event.event_status,
-                months=months,
-                status_reason_prefix="Platega webhook status",
-                transaction=verified_transaction,
-            )
-            if processed:
-                async with async_session_maker() as processed_session:
-                    await PaymentRepository(processed_session).mark_webhook_processed(
-                        webhook_event_id,
-                        datetime.now(tz=UTC),
-                    )
-                    await processed_session.commit()
-                return
-
-            await repository.mark_webhook_processed(
+        async with async_session_maker() as processed_session:
+            await PaymentRepository(processed_session).mark_webhook_processed(
                 webhook_event_id,
                 datetime.now(tz=UTC),
             )
-            await session.commit()
+            await processed_session.commit()
 
     async def process_transaction_status(
         self,
@@ -244,6 +250,24 @@ class PlategaWebhookService:
             if isinstance(nested, dict):
                 values.extend(cls._candidate_values(nested, *keys))
         return values
+
+    @classmethod
+    def _extract_transaction_id(cls, data: dict[str, Any]) -> str | None:
+        for value in cls._candidate_values(
+            data,
+            "id",
+            "transactionId",
+            "transaction_id",
+            "paymentId",
+            "payment_id",
+            "uuid",
+        ):
+            if value is None:
+                continue
+            transaction_id = str(value).strip()
+            if transaction_id:
+                return transaction_id
+        return None
 
     @classmethod
     def _extract_transaction_status(cls, data: dict[str, Any]) -> str | None:
