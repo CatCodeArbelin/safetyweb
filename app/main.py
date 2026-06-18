@@ -23,7 +23,7 @@ from app.config import Settings
 from app.db.models import PaymentStatus
 from app.services.payment_service import PaymentService
 from app.services.subscription_service import SubscriptionService
-from app.services.vpn_service import VpnService
+from app.services.vpn_service import ProvisionResult, VpnService
 from app.services.xui_client import XuiClient, XuiError
 from app.tasks.scheduler import create_scheduler
 
@@ -114,6 +114,11 @@ def docs_keyboard(settings: Settings) -> InlineKeyboardMarkup:
         ]
     )
 
+
+
+def format_provision_expires(result: ProvisionResult) -> str:
+    """Format provision expiry timestamp for bot messages."""
+    return escape(result.expires_at.strftime("%Y-%m-%d %H:%M UTC"))
 
 def support_contact_text(settings: Settings) -> str:
     """Format support contact information for bot messages."""
@@ -301,15 +306,21 @@ async def create_payment_request(
     if settings.test_mode:
         vpn_service = VpnService(settings=settings)
         try:
-            vpn_link = await vpn_service.create_client(telegram_id=user.id, months=months)
+            provision_result = await vpn_service.provision_or_extend_client(
+                telegram_id=user.id,
+                months=months,
+            )
         finally:
             await vpn_service.close()
 
         await state.clear()
         await callback.message.answer(
             "Тестовый режим включён ✅\n\n"
-            f"Ваша ссылка для защищённого соединения на тариф <b>{TARIFFS[months]}</b>:\n"
-            f"<code>{escape(vpn_link)}</code>",
+            f"{'Доступ создан' if provision_result.action == 'created' else 'Подписка продлена'} "
+            f"на тариф <b>{TARIFFS[months]}</b>.\n"
+            f"Действует до: <code>{format_provision_expires(provision_result)}</code>\n\n"
+            f"Ваша ссылка для защищённого соединения:\n"
+            f"<code>{escape(provision_result.connection_link)}</code>",
             reply_markup=main_menu_keyboard(),
         )
         await callback.answer("Тестовый доступ выдан")
@@ -375,18 +386,30 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
     user_id = payment.user.telegram_id
     vpn_service = VpnService(settings=settings)
     try:
-        vpn_link = await vpn_service.create_client(telegram_id=user_id, months=months)
+        provision_result = await vpn_service.provision_or_extend_client(
+            telegram_id=user_id,
+            months=months,
+        )
     finally:
         await vpn_service.close()
 
     await callback.bot.send_message(
         user_id,
         "Оплата подтверждена ✅\n\n"
-        f"Ваша ссылка для защищённого соединения на тариф <b>{TARIFFS.get(months, f'{months} мес.')}</b>:\n"
-        f"<code>{escape(vpn_link)}</code>",
+        f"{'Доступ создан' if provision_result.action == 'created' else 'Подписка продлена'} "
+        f"на тариф <b>{TARIFFS.get(months, f'{months} мес.')}</b>.\n"
+        f"Действует до: <code>{format_provision_expires(provision_result)}</code>\n\n"
+        f"Ваша ссылка для защищённого соединения:\n"
+        f"<code>{escape(provision_result.connection_link)}</code>",
+    )
+    admin_action_text = (
+        "создана новая подписка"
+        if provision_result.action == "created"
+        else "продлена активная подписка"
     )
     await callback.message.edit_text(
-        f"Оплата подтверждена. Ссылка для защищённого соединения отправлена пользователю <code>{user_id}</code>."
+        f"Оплата подтверждена: {admin_action_text}. "
+        f"Ссылка для защищённого соединения отправлена пользователю <code>{user_id}</code>."
     )
     await callback.answer("Оплата подтверждена")
 

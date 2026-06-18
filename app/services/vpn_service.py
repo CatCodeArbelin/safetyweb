@@ -2,6 +2,7 @@
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from secrets import token_hex
 from typing import Any
@@ -18,6 +19,15 @@ from app.services.xui_client import XuiClient
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ProvisionResult:
+    """Result of creating or extending a protected access subscription."""
+
+    connection_link: str
+    expires_at: datetime
+    action: str
 
 
 class VpnService:
@@ -42,21 +52,49 @@ class VpnService:
             await self.xui_client.close()
 
     async def create_client(self, telegram_id: int, months: int) -> str:
-        """Create a paid subscription and return the user's connection link."""
+        """Create or extend a paid subscription and return its connection link."""
+        result = await self.provision_or_extend_client(telegram_id, months)
+        return result.connection_link
+
+    async def provision_or_extend_client(
+        self,
+        telegram_id: int,
+        months: int,
+    ) -> ProvisionResult:
+        """Create a new subscription or extend the user's active one."""
         if self.session is not None:
+            subscription = await SubscriptionRepository(
+                self.session
+            ).get_active_by_telegram_id(telegram_id)
+            if subscription is not None:
+                return await self._extend_active_subscription(
+                    self.session,
+                    subscription,
+                    months,
+                )
             return await self._create_client(self.session, telegram_id, months)
 
         async with async_session_maker() as session:
-            link = await self._create_client(session, telegram_id, months)
+            subscription = await SubscriptionRepository(session).get_active_by_telegram_id(
+                telegram_id
+            )
+            if subscription is not None:
+                result = await self._extend_active_subscription(
+                    session,
+                    subscription,
+                    months,
+                )
+            else:
+                result = await self._create_client(session, telegram_id, months)
             await session.commit()
-            return link
+            return result
 
     async def _create_client(
         self,
         session: AsyncSession,
         telegram_id: int,
         months: int,
-    ) -> str:
+    ) -> ProvisionResult:
         """Provision a 3x-ui client and persist the matching subscription."""
         if months not in self.ALLOWED_TARIFF_MONTHS:
             msg = "Subscription tariff must be 1, 3, 6, or 12 months"
@@ -164,7 +202,81 @@ class VpnService:
                 "connection_link": connection_link,
             },
         )
-        return connection_link
+        return ProvisionResult(
+            connection_link=connection_link,
+            expires_at=expires_at,
+            action="created",
+        )
+
+    async def _extend_active_subscription(
+        self,
+        session: AsyncSession,
+        subscription: Any,
+        months: int,
+    ) -> ProvisionResult:
+        """Extend an active subscription both in X-UI and in local storage."""
+        if months not in self.ALLOWED_TARIFF_MONTHS:
+            msg = "Subscription tariff must be 1, 3, 6, or 12 months"
+            raise ValueError(msg)
+
+        current_expires_at = subscription.expires_at
+        if current_expires_at.tzinfo is None:
+            current_expires_at = current_expires_at.replace(tzinfo=UTC)
+        base_time = max(current_expires_at, datetime.now(UTC))
+        expires_at = base_time + relativedelta(months=months)
+        expiry_ms = int(expires_at.timestamp() * 1000)
+
+        vpn_config = dict(subscription.vpn_config or {})
+        client_payload = dict(
+            vpn_config.get("client") or vpn_config.get("provisioned_client") or {}
+        )
+        client_payload["id"] = subscription.xui_client_id
+        client_payload["email"] = subscription.xui_email
+        client_payload["expiryTime"] = expiry_ms
+        client_payload["enable"] = True
+
+        await self.xui_client.update_client(
+            subscription.inbound_id,
+            subscription.xui_client_id,
+            {"clients": [client_payload]},
+            enable=True,
+        )
+
+        vpn_config["client"] = client_payload
+        vpn_config["provisioned_client"] = client_payload
+        vpn_config["expires_at"] = expires_at.isoformat()
+        connection_link = self._existing_connection_link(vpn_config)
+        vpn_config["connection_link"] = connection_link
+        vpn_config.setdefault("subscription_url", connection_link)
+
+        subscription.expires_at = expires_at
+        subscription.vpn_config = vpn_config
+        session.add(subscription)
+        await session.flush()
+
+        return ProvisionResult(
+            connection_link=connection_link,
+            expires_at=expires_at,
+            action="extended",
+        )
+
+    def _existing_connection_link(self, vpn_config: dict[str, Any]) -> str:
+        """Return or rebuild the persisted connection link for a subscription."""
+        for key in ("connection_link", "subscription_url"):
+            value = vpn_config.get(key)
+            if isinstance(value, str) and value:
+                return value
+
+        sub_id = vpn_config.get("subId")
+        if (
+            isinstance(sub_id, str)
+            and sub_id
+            and self.settings.xui_sub_base_url
+        ):
+            return self._build_subscription_url(self.settings.xui_sub_base_url, sub_id)
+
+        msg = "Active subscription does not contain a reusable connection link"
+        raise RuntimeError(msg)
 
     @staticmethod
     def _build_subscription_url(base_url: str, sub_id: str) -> str:
