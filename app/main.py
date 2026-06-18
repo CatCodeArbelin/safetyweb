@@ -7,7 +7,7 @@ from html import escape
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.redis import RedisStorage
@@ -24,6 +24,7 @@ from app.config import Settings
 from app.db.models import PaymentStatus
 from app.services.benefit_service import BenefitService
 from app.services.payment_service import PaymentService
+from app.services.referral_service import ReferralService
 from app.services.subscription_service import SubscriptionService
 from app.services.vpn_service import ProvisionResult, VpnService
 from app.services.xui_client import XuiClient, XuiError
@@ -50,6 +51,7 @@ BTN_MY_SUBSCRIPTION = "📅 Моя подписка"
 BTN_INSTRUCTION = "📲 Инструкция"
 BTN_SUPPORT = "💬 Поддержка"
 BTN_DOCUMENTS = "📄 Документы"
+BTN_INVITE_FRIEND = "🎁 Пригласить друга"
 TARIFF_EMOJIS = {1: "🔹", 3: "🔷", 6: "💎", 12: "👑"}
 
 router = Router(name="safetyweb")
@@ -68,7 +70,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=BTN_BUY_ACCESS), KeyboardButton(text=BTN_MY_SUBSCRIPTION)],
             [KeyboardButton(text=BTN_INSTRUCTION), KeyboardButton(text=BTN_SUPPORT)],
-            [KeyboardButton(text=BTN_DOCUMENTS)],
+            [KeyboardButton(text=BTN_DOCUMENTS), KeyboardButton(text=BTN_INVITE_FRIEND)],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите действие",
@@ -194,9 +196,22 @@ def confirm_payment_keyboard(provider_payment_id: str, months: int) -> InlineKey
 
 
 @router.message(CommandStart())
-async def start(message: Message, state: FSMContext) -> None:
+async def start(
+    message: Message,
+    state: FSMContext,
+    command: CommandObject,
+    settings: Settings,
+) -> None:
     """Handle /start and show the main menu."""
     await state.clear()
+    if (
+        message.from_user is not None
+        and command.args
+        and command.args.startswith("ref_")
+    ):
+        await ReferralService(settings=settings).register_referral(
+            message.from_user.id, command.args.removeprefix("ref_")
+        )
     await message.answer(
         "🌏 ЛадНет | Безопасный Интернет\n\n"
         "Цифровой сервис защищённого сетевого доступа.\n"
@@ -275,6 +290,24 @@ async def docs_support(callback: CallbackQuery, settings: Settings) -> None:
     """Show support contacts from the documents menu."""
     await callback.message.answer(support_contact_text(settings))
     await callback.answer()
+
+
+@router.message(F.text == BTN_INVITE_FRIEND)
+async def invite_friend(message: Message, settings: Settings) -> None:
+    """Return the user's referral invite link."""
+    if message.from_user is None:
+        await message.answer("Не удалось определить пользователя.")
+        return
+    if not settings.referral_enabled:
+        await message.answer("Реферальная программа сейчас недоступна.")
+        return
+
+    code = await ReferralService(settings=settings).get_or_create_code(message.from_user.id)
+    invite_url = f"{settings.bot_public_url}?start=ref_{code}"
+    await message.answer(
+        "Пригласите друга и получите бонусные дни после его первой оплаты 🎁\n\n"
+        f"Ваша ссылка:\n<code>{escape(invite_url)}</code>"
+    )
 
 
 @router.message(F.text == BTN_BUY_ACCESS)
@@ -430,6 +463,11 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
     benefit_granted = (
         await BenefitService(settings=settings).grant_early_buyer_discount_if_eligible(user_id)
     )
+    referral_rewards = []
+    if not settings.test_mode:
+        referral_rewards = await ReferralService(settings=settings).apply_first_payment_rewards(
+            user_id, months
+        )
     paid_base_price = Decimal(str(TARIFF_PRICES.get(months, payment.amount)))
     paid_amount = Decimal(str(payment.amount))
     paid_discount = paid_base_price - paid_amount
@@ -448,6 +486,11 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
         if benefit_granted
         else ""
     )
+    referral_rewards_text = (
+        "Начислены реферальные бонусные дни 🎁\n\n"
+        if referral_rewards
+        else ""
+    )
 
     await callback.bot.send_message(
         user_id,
@@ -457,6 +500,7 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
         f"{paid_discount_summary}\n"
         f"Действует до: <code>{format_provision_expires(provision_result)}</code>\n\n"
         f"{benefit_granted_text}"
+        f"{referral_rewards_text}"
         f"Ваша ссылка для защищённого соединения:\n"
         f"<code>{escape(provision_result.connection_link)}</code>",
     )
@@ -469,7 +513,8 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
         f"Оплата подтверждена: {admin_action_text}. "
         f"Ссылка для защищённого соединения отправлена пользователю <code>{user_id}</code>.\n"
         f"{paid_discount_summary}\n"
-        f"Скидка раннего покупателя выдана: <code>{'да' if benefit_granted else 'нет'}</code>"
+        f"Скидка раннего покупателя выдана: <code>{'да' if benefit_granted else 'нет'}</code>\n"
+        f"Реферальных наград начислено: <code>{len(referral_rewards)}</code>"
     )
     await callback.answer("Оплата подтверждена")
 
