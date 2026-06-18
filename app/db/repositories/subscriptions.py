@@ -9,6 +9,10 @@ from sqlalchemy.orm import selectinload
 from app.db.models import Subscription, SubscriptionStatus, User
 
 
+class ActiveSubscriptionAlreadyExistsError(Exception):
+    """Raised when creating a second active subscription for a user."""
+
+
 class SubscriptionRepository:
     """Persist and query protected access subscriptions."""
 
@@ -24,7 +28,7 @@ class SubscriptionRepository:
                 User.telegram_id == telegram_id,
                 Subscription.status == SubscriptionStatus.ACTIVE,
             )
-            .order_by(Subscription.expires_at.desc())
+            .order_by(Subscription.expires_at.desc(), Subscription.created_at.desc())
             .options(selectinload(Subscription.user))
             .limit(1)
         )
@@ -42,7 +46,7 @@ class SubscriptionRepository:
                 Subscription.vpn_config["last_payment_id"].as_string()
                 == provider_payment_id,
             )
-            .order_by(Subscription.expires_at.desc())
+            .order_by(Subscription.expires_at.desc(), Subscription.created_at.desc())
             .options(selectinload(Subscription.user))
             .limit(1)
         )
@@ -59,6 +63,14 @@ class SubscriptionRepository:
         vpn_config: dict,
     ) -> Subscription:
         """Create an active subscription record."""
+        existing = await self.get_active_by_telegram_id(user.telegram_id)
+        if existing is not None:
+            msg = (
+                f"Telegram user {user.telegram_id} already has an active "
+                f"subscription {existing.id}"
+            )
+            raise ActiveSubscriptionAlreadyExistsError(msg)
+
         subscription = Subscription(
             user=user,
             xui_client_id=xui_client_id,
