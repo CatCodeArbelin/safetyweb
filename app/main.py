@@ -22,10 +22,10 @@ from aiogram.types import (
 )
 
 from app.config import Settings
-from app.db.models import PaymentStatus
 from app.db.repositories import SubscriptionRepository, UserRepository
 from app.db.session import async_session_maker
 from app.services.benefit_service import BenefitService
+from app.services.payment_finalization_service import PaymentFinalizationService
 from app.services.payment_service import PaymentService
 from app.services.referral_service import ReferralService
 from app.services.stats_service import AdminStats, StatsService
@@ -992,62 +992,24 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
 
     _, provider_payment_id, months_raw = (callback.data or "").split(":", maxsplit=2)
     months = int(months_raw)
-    payment_service = PaymentService(settings=settings)
-    status = await payment_service.get_payment_status(provider_payment_id)
-    payment = None
-    if status == PaymentStatus.PAID:
-        payment = await payment_service.get_manual_payment(provider_payment_id)
-        if payment.subscription_id is not None:
-            await callback.answer("Платёж уже подтверждён ранее", show_alert=True)
-            await callback.message.answer(
-                f"Платёж <code>{escape(provider_payment_id)}</code> уже подтверждён ранее. "
-                "Повторная выдача доступа не выполнена."
-            )
-            return
-    if status in {PaymentStatus.REFUNDED, PaymentStatus.FAILED}:
+    try:
+        finalization_result = await PaymentFinalizationService(
+            settings=settings,
+            bot=callback.bot,
+        ).finalize_paid_payment(provider_payment_id, months)
+    except ValueError:
         await callback.answer("Платёж нельзя подтвердить в этом статусе", show_alert=True)
         return
-
-    user_id = None
-    vpn_service = None
-    try:
-        if payment is None:
-            payment = await payment_service.confirm_manual_payment(provider_payment_id)
-        user_id = payment.user.telegram_id
-        provision_result = None
-        if status == PaymentStatus.PAID and payment.subscription_id is None:
-            async with async_session_maker() as session:
-                subscription = await SubscriptionRepository(
-                    session
-                ).get_by_last_payment_id(user_id, provider_payment_id)
-                if subscription is not None:
-                    provision_result = VpnService.provision_result_from_subscription(
-                        subscription
-                    )
-
-        if provision_result is None:
-            vpn_service = VpnService(settings=settings)
-            provision_result = await vpn_service.provision_or_extend_client(
-                telegram_id=user_id,
-                months=months,
-                source_payment_id=provider_payment_id,
-            )
-        await payment_service.attach_subscription(
-            provider_payment_id, provision_result.subscription_id
-        )
     except XuiError as error:
         await notify_admins(
             callback.bot,
             settings,
             format_access_error_alert(
                 error,
-                user_id=user_id,
                 months=months,
                 provider_payment_id=provider_payment_id,
             ),
         )
-        if user_id is not None:
-            await callback.bot.send_message(user_id, PROVISIONING_USER_ERROR)
         await callback.answer("Техническая ошибка", show_alert=True)
         return
     except RuntimeError as error:
@@ -1056,13 +1018,10 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
             settings,
             format_access_error_alert(
                 error,
-                user_id=user_id,
                 months=months,
                 provider_payment_id=provider_payment_id,
             ),
         )
-        if user_id is not None:
-            await callback.bot.send_message(user_id, PROVISIONING_USER_ERROR)
         await callback.answer("Техническая ошибка", show_alert=True)
         return
     except Exception as error:
@@ -1071,61 +1030,29 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
             settings,
             format_access_error_alert(
                 error,
-                user_id=user_id,
                 months=months,
                 provider_payment_id=provider_payment_id,
             ),
         )
-        if user_id is not None:
-            await callback.bot.send_message(user_id, PROVISIONING_USER_ERROR)
         await callback.answer("Техническая ошибка", show_alert=True)
         return
-    finally:
-        if vpn_service is not None:
-            await vpn_service.close()
 
-    try:
-        await ReferralService(settings=settings).apply_pending_rewards(user_id)
-    except Exception as error:
-        await notify_admins(
-            callback.bot,
-            settings,
-            "Ошибка применения отложенных реферальных бонусов\n"
-            f"Пользователь: <code>{user_id}</code>\n"
-            f"Ошибка: <code>{escape(str(error))}</code>",
+    if finalization_result.already_finalized:
+        await callback.answer("Платёж уже подтверждён ранее", show_alert=True)
+        await callback.message.answer(
+            f"Платёж <code>{escape(provider_payment_id)}</code> уже подтверждён ранее. "
+            "Повторная выдача доступа не выполнена."
         )
+        return
 
-    benefit_granted = False
-    try:
-        benefit_granted = await BenefitService(
-            settings=settings
-        ).grant_early_buyer_discount_if_eligible(user_id)
-    except Exception as error:
-        await notify_admins(
-            callback.bot,
-            settings,
-            "Ошибка выдачи скидки раннего покупателя\n"
-            f"Пользователь: <code>{user_id}</code>\n"
-            f"Ошибка: <code>{escape(str(error))}</code>",
-        )
-        benefit_granted = False
-
-    referral_rewards = []
-    if not settings.test_mode or settings.test_mode_referral_rewards_enabled:
-        try:
-            referral_rewards = await ReferralService(
-                settings=settings
-            ).apply_first_payment_rewards(user_id, months)
-        except Exception as error:
-            await notify_admins(
-                callback.bot,
-                settings,
-                "Ошибка начисления реферального бонуса\n"
-                f"Пользователь: <code>{user_id}</code>\n"
-                f"Месяцев: <code>{months}</code>\n"
-                f"Ошибка: <code>{escape(str(error))}</code>",
-            )
-            referral_rewards = []
+    payment = finalization_result.payment
+    provision_result = finalization_result.provision_result
+    if provision_result is None:
+        await callback.answer("Платёж уже подтверждён ранее", show_alert=True)
+        return
+    user_id = payment.user.telegram_id
+    benefit_granted = finalization_result.benefit_granted
+    referral_rewards = finalization_result.referral_rewards
 
     paid_base_price = Decimal(str(TARIFF_PRICES.get(months, payment.amount)))
     paid_amount = Decimal(str(payment.amount))
