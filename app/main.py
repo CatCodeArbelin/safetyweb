@@ -26,7 +26,7 @@ from app.db.repositories import SubscriptionRepository, UserRepository
 from app.db.session import async_session_maker
 from app.services.benefit_service import BenefitService
 from app.services.payment_finalization_service import PaymentFinalizationService
-from app.services.payment_service import PaymentService
+from app.services.payment_service import PaymentCreateResult, PaymentService
 from app.services.referral_service import ReferralService
 from app.services.stats_service import AdminStats, StatsService
 from app.services.subscription_service import SubscriptionService
@@ -329,6 +329,15 @@ def confirm_payment_keyboard(provider_payment_id: str, months: int) -> InlineKey
                     callback_data=f"confirm:{provider_payment_id}:{months}",
                 )
             ]
+        ]
+    )
+
+
+def payment_url_keyboard(payment_url: str) -> InlineKeyboardMarkup:
+    """Build inline keyboard with provider payment URL."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Оплатить подписку", url=payment_url)]
         ]
     )
 
@@ -930,57 +939,75 @@ async def create_payment_request(
     discount_summary = format_discount_summary(base_price, discount_percent, final_price)
 
     payment_service = PaymentService(settings=settings)
-    payment_result = await payment_service.create_payment(
+    result: PaymentCreateResult = await payment_service.create_payment(
         user_id=user.id,
         tariff_id=months,
         amount=final_price,
         currency=PAYMENT_CURRENCY,
     )
-    payment = payment_result.payment
-    await state.update_data(months=months, payment_id=payment_result.provider_payment_id)
-    admin_title = (
-        "Новая заявка на продление подписки"
-        if active_subscription is not None
-        else "Новая заявка на оформление доступа"
-    )
-    admin_text = (
-        f"{admin_title}\n\n"
-        f"Пользователь: <a href=\"tg://user?id={user.id}\">{escape(user.full_name)}</a>\n"
-        f"Telegram ID: <code>{user.id}</code>\n"
-        f"Username: @{escape(user.username) if user.username else '—'}\n"
-        f"Тариф: <b>{TARIFFS[months]}</b>\n"
-        f"Платёж: <code>{payment.provider_payment_id}</code>\n"
-        f"{discount_summary}\n"
-        f"Сумма платежа: <code>{payment.amount} {payment.currency}</code>"
-    )
+    payment = result.payment
+    await state.update_data(months=months, payment_id=result.provider_payment_id)
 
-    for admin_id in settings.admin_ids:
-        await bot.send_message(
-            admin_id,
-            admin_text,
-            reply_markup=confirm_payment_keyboard(payment.provider_payment_id or "", months),
+    if result.provider == "manual":
+        admin_title = (
+            "Новая заявка на продление подписки"
+            if active_subscription is not None
+            else "Новая заявка на оформление доступа"
+        )
+        admin_text = (
+            f"{admin_title}\n\n"
+            f"Пользователь: <a href=\"tg://user?id={user.id}\">{escape(user.full_name)}</a>\n"
+            f"Telegram ID: <code>{user.id}</code>\n"
+            f"Username: @{escape(user.username) if user.username else '—'}\n"
+            f"Тариф: <b>{TARIFFS[months]}</b>\n"
+            f"Платёж: <code>{payment.provider_payment_id}</code>\n"
+            f"{discount_summary}\n"
+            f"Сумма платежа: <code>{payment.amount} {payment.currency}</code>"
         )
 
-    await state.clear()
-    if active_subscription is not None:
-        user_request_text = (
-            "Заявка на продление создана.\n"
-            "После подтверждения оплаты текущий доступ будет продлён.\n"
-            "Ссылка останется прежней.\n\n"
-            f"{discount_summary}"
-        )
-    else:
-        user_request_text = (
-            "Заявка создана. После проверки оплаты администратор подтвердит её, "
-            "и бот отправит вам ссылку для защищённого соединения.\n\n"
-            f"{discount_summary}"
-        )
+        for admin_id in settings.admin_ids:
+            await bot.send_message(
+                admin_id,
+                admin_text,
+                reply_markup=confirm_payment_keyboard(
+                    payment.provider_payment_id or "", months
+                ),
+            )
 
-    await callback.message.answer(
-        user_request_text,
-        reply_markup=main_menu_keyboard(),
-    )
-    await callback.answer("Заявка отправлена")
+        await state.clear()
+        if active_subscription is not None:
+            user_request_text = (
+                "Заявка на продление создана.\n"
+                "После подтверждения оплаты текущий доступ будет продлён.\n"
+                "Ссылка останется прежней.\n\n"
+                f"{discount_summary}"
+            )
+        else:
+            user_request_text = (
+                "Заявка создана. После проверки оплаты администратор подтвердит её, "
+                "и бот отправит вам ссылку для защищённого соединения.\n\n"
+                f"{discount_summary}"
+            )
+
+        await callback.message.answer(
+            user_request_text,
+            reply_markup=main_menu_keyboard(),
+        )
+        await callback.answer("Заявка отправлена")
+        return
+
+    if result.provider == "platega" and result.payment_url is not None:
+        await state.clear()
+        await callback.message.answer(
+            "Подписка готова. Нажмите кнопку, чтобы открыть ссылку для "
+            "защищённого соединения и оплатить подписку.\n\n"
+            f"{discount_summary}",
+            reply_markup=payment_url_keyboard(result.payment_url),
+        )
+        await callback.answer("Подписка готова")
+        return
+
+    await callback.answer("Не удалось подготовить подписку", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("confirm:"))
