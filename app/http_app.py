@@ -18,16 +18,6 @@ from app.services.platega_webhook_service import PlategaWebhookService
 if TYPE_CHECKING:
     from aiogram import Bot
 
-SENSITIVE_HEADER_MARKERS = (
-    "authorization",
-    "cookie",
-    "secret",
-    "token",
-    "api-key",
-    "apikey",
-    "x-secret",
-)
-
 
 def create_app(settings: Settings | None = None, bot: Bot | None = None) -> FastAPI:
     """Create the FastAPI application."""
@@ -41,9 +31,9 @@ def create_app(settings: Settings | None = None, bot: Bot | None = None) -> Fast
     ) -> dict[str, Any]:
         """Persist a Platega callback and enqueue asynchronous processing."""
         raw_body = await request.body()
-        payload_hash = hashlib.sha256(raw_body).hexdigest()
+        payload_hash = hashlib.sha256(b"platega:" + raw_body).hexdigest()
+        _verify_callback_headers(request, app_settings)
         payload = await _json_payload(request)
-        _verify_callback_secret(request, app_settings)
 
         provider_payment_id = _extract_first_str(
             payload,
@@ -63,7 +53,7 @@ def create_app(settings: Settings | None = None, bot: Bot | None = None) -> Fast
             "paymentStatus",
             "payment_status",
         )
-        headers = _sanitize_headers(request.headers)
+        headers = _safe_callback_headers(request)
 
         async with async_session_maker() as session:
             repository = PaymentRepository(session)
@@ -127,39 +117,36 @@ async def _json_payload(request: Request) -> dict[str, Any]:
     return payload
 
 
-def _verify_callback_secret(request: Request, settings: Settings) -> None:
-    if settings.platega_callback_secret is None:
-        return
+def _verify_callback_headers(request: Request, settings: Settings) -> None:
+    merchant_id = request.headers.get("x-merchantid", "")
+    expected_merchant_id = settings.platega_merchant_id or "\0"
+    if not hmac.compare_digest(merchant_id, expected_merchant_id):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid callback merchant id",
+        )
 
-    expected = settings.platega_callback_secret.get_secret_value()
-    provided = _extract_secret_header(request)
-    if not provided or not hmac.compare_digest(provided, expected):
+    secret = request.headers.get("x-secret", "")
+    expected_secret = _expected_callback_secret(settings)
+    if not hmac.compare_digest(secret, expected_secret):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid callback secret",
         )
 
 
-def _extract_secret_header(request: Request) -> str | None:
-    for header_name in ("x-secret", "x-callback-secret", "x-platega-secret"):
-        value = request.headers.get(header_name)
-        if value:
-            return value
-    authorization = request.headers.get("authorization")
-    if authorization and authorization.lower().startswith("bearer "):
-        return authorization[7:].strip()
-    return None
+def _expected_callback_secret(settings: Settings) -> str:
+    secret = settings.platega_callback_secret or settings.platega_api_key
+    return secret.get_secret_value() if secret is not None else "\0"
 
 
-def _sanitize_headers(headers: Any) -> dict[str, str]:
-    sanitized: dict[str, str] = {}
-    for key, value in headers.items():
-        normalized = key.lower()
-        if any(marker in normalized for marker in SENSITIVE_HEADER_MARKERS):
-            sanitized[key] = "***"
-        else:
-            sanitized[key] = value
-    return sanitized
+def _safe_callback_headers(request: Request) -> dict[str, str | bool | None]:
+    return {
+        "merchant_id": request.headers.get("x-merchantid"),
+        "secret_verified": True,
+        "user_agent": request.headers.get("user-agent"),
+        "x_forwarded_for": request.headers.get("x-forwarded-for"),
+    }
 
 
 def _extract_first_str(data: dict[str, Any], *keys: str) -> str | None:
