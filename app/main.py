@@ -122,6 +122,15 @@ def tariff_keyboard(discount_percent: int = 0) -> InlineKeyboardMarkup:
     )
 
 
+def renew_subscription_keyboard() -> InlineKeyboardMarkup:
+    """Build inline keyboard for active subscription renewal."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="renew")]
+        ]
+    )
+
+
 def docs_keyboard(settings: Settings) -> InlineKeyboardMarkup:
     """Build inline keyboard with legal documents and support actions."""
     return InlineKeyboardMarkup(
@@ -933,13 +942,16 @@ async def my_subscription(message: Message) -> None:
         return
 
     details = await SubscriptionService().get_status_details(message.from_user.id)
-    await message.answer(
-        SubscriptionService.format_status(
-            details.subscription,
-            early_buyer_discount_percent=details.early_buyer_discount_percent,
-            pending_referral_bonus_days=details.pending_referral_bonus_days,
-        )
+    status_text = SubscriptionService.format_status(
+        details.subscription,
+        early_buyer_discount_percent=details.early_buyer_discount_percent,
+        pending_referral_bonus_days=details.pending_referral_bonus_days,
     )
+    if details.subscription is not None:
+        await message.answer(status_text, reply_markup=renew_subscription_keyboard())
+        return
+
+    await message.answer(status_text)
 
 
 @router.message(Command("link"))
