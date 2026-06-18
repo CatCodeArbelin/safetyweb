@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Final
 
@@ -18,6 +18,44 @@ from app.services.platega_client import PlategaClient, build_platega_payload
 
 MANUAL_PROVIDER_NAME: Final = "manual"
 PLATEGA_PROVIDER_NAME: Final = "platega"
+
+
+def _extract_provider_expires_at(
+    data: dict[str, Any], created_at: datetime | None = None
+) -> datetime | None:
+    """Extract Platega expiration time from ISO datetime or expiresIn values."""
+    for key in ("expiresAt", "expires_at", "expiredAt", "expired_at"):
+        value = data.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed
+
+    expires_in = data.get("expiresIn")
+    if expires_in is None or expires_in == "":
+        expires_in = data.get("expires_in")
+    if expires_in is None or expires_in == "":
+        return None
+
+    try:
+        numeric_expires_in = float(expires_in)
+    except (TypeError, ValueError):
+        return None
+
+    if numeric_expires_in > 10_000_000_000:
+        return datetime.fromtimestamp(numeric_expires_in / 1000, tz=UTC)
+    if numeric_expires_in > 1_000_000_000:
+        return datetime.fromtimestamp(numeric_expires_in, tz=UTC)
+
+    base = created_at or datetime.now(tz=UTC)
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=UTC)
+    return base + timedelta(seconds=numeric_expires_in)
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,6 +256,21 @@ class PlategaPaymentProvider(PaymentProvider):
             )
             await session.commit()
 
+            payload = build_platega_payload(
+                payment_id=payment.id,
+                telegram_id=user_id,
+                months=tariff_id,
+            )
+            create_request: dict[str, Any] = {
+                "amount": payment.amount,
+                "currency": payment.currency,
+                "description": description,
+                "payload": payload,
+                "user_id": user_id,
+                "user_name": str(user_id),
+                "payment_method": self.settings.platega_payment_method,
+            }
+
             client = self.client or PlategaClient(settings=self.settings)
             should_close_client = self.client is None
             try:
@@ -225,11 +278,7 @@ class PlategaPaymentProvider(PaymentProvider):
                     amount=payment.amount,
                     currency=payment.currency,
                     description=description,
-                    payload=build_platega_payload(
-                        payment_id=payment.id,
-                        telegram_id=user_id,
-                        months=tariff_id,
-                    ),
+                    payload=payload,
                     user_id=user_id,
                     user_name=str(user_id),
                     payment_method=self.settings.platega_payment_method,
@@ -238,17 +287,27 @@ class PlategaPaymentProvider(PaymentProvider):
                 if should_close_client:
                     await client.close()
 
+            sanitized_provider_response = self._sanitize_provider_data(
+                provider_response
+            )
+            sanitized_create_request = self._sanitize_provider_data(create_request)
+            provider_data = {
+                "create_response": sanitized_provider_response,
+                "create_request": sanitized_create_request,
+            }
+
             provider_payment_id = self._extract_first_str(
                 provider_response,
-                "id",
                 "transactionId",
                 "transaction_id",
+                "id",
                 "paymentId",
                 "payment_id",
                 "uuid",
             )
             payment_url = self._extract_first_str(
                 provider_response,
+                "redirect",
                 "redirectUrl",
                 "redirect_url",
                 "paymentUrl",
@@ -256,6 +315,26 @@ class PlategaPaymentProvider(PaymentProvider):
                 "url",
                 "link",
             )
+
+            if provider_payment_id is None:
+                await self._fail_created_payment(
+                    session,
+                    payment,
+                    provider_data,
+                    "platega_missing_transaction_id",
+                )
+                msg = "Platega response does not contain a transaction id"
+                raise ValueError(msg)
+
+            if payment_url is None:
+                await self._fail_created_payment(
+                    session,
+                    payment,
+                    provider_data,
+                    "platega_missing_redirect_url",
+                )
+                msg = "Platega response does not contain a payment redirect URL"
+                raise ValueError(msg)
 
             payment.provider_payment_id = provider_payment_id
             payment.provider_redirect_url = payment_url
@@ -265,14 +344,11 @@ class PlategaPaymentProvider(PaymentProvider):
                 "payment_method",
                 "method",
             )
-            payment.provider_expires_at = self._extract_datetime(
+            payment.provider_expires_at = _extract_provider_expires_at(
                 provider_response,
-                "expiresAt",
-                "expires_at",
-                "expiredAt",
-                "expired_at",
+                payment.created_at,
             )
-            payment.provider_data = self._sanitize_provider_data(provider_response)
+            payment.provider_data = provider_data
             await session.flush()
             await session.commit()
 
@@ -282,6 +358,19 @@ class PlategaPaymentProvider(PaymentProvider):
                 payment_url=payment.provider_redirect_url,
                 provider=PLATEGA_PROVIDER_NAME,
             )
+
+    @staticmethod
+    async def _fail_created_payment(
+        session: AsyncSession,
+        payment: Payment,
+        provider_data: dict[str, Any],
+        status_reason: str,
+    ) -> None:
+        payment.status = PaymentStatus.FAILED
+        payment.status_reason = status_reason
+        payment.provider_data = provider_data
+        await session.flush()
+        await session.commit()
 
     @staticmethod
     def _extract_first_str(data: dict[str, Any], *keys: str) -> str | None:
@@ -335,6 +424,10 @@ class PlategaPaymentProvider(PaymentProvider):
                 if secret_value:
                     sanitized_text = sanitized_text.replace(secret_value, "***")
             return sanitized_text
+        if isinstance(value, Decimal):
+            if value == value.to_integral_value():
+                return int(value)
+            return str(value)
         return value
 
     @staticmethod
