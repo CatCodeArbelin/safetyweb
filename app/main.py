@@ -48,6 +48,7 @@ PAYMENT_CURRENCY = "RUB"
 
 BTN_BUY_ACCESS = "🛒 Оформить доступ"
 BTN_MY_SUBSCRIPTION = "📅 Моя подписка"
+BTN_MY_LINK = "🔗 Моя ссылка"
 BTN_INSTRUCTION = "📲 Инструкция"
 BTN_SUPPORT = "💬 Поддержка"
 BTN_DOCUMENTS = "📄 Документы"
@@ -69,8 +70,9 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_BUY_ACCESS), KeyboardButton(text=BTN_MY_SUBSCRIPTION)],
-            [KeyboardButton(text=BTN_INSTRUCTION), KeyboardButton(text=BTN_SUPPORT)],
-            [KeyboardButton(text=BTN_DOCUMENTS), KeyboardButton(text=BTN_INVITE_FRIEND)],
+            [KeyboardButton(text=BTN_MY_LINK), KeyboardButton(text=BTN_INSTRUCTION)],
+            [KeyboardButton(text=BTN_SUPPORT), KeyboardButton(text=BTN_DOCUMENTS)],
+            [KeyboardButton(text=BTN_INVITE_FRIEND)],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите действие",
@@ -528,6 +530,31 @@ async def my_subscription(message: Message) -> None:
 
     subscription = await SubscriptionService().get_active_subscription(message.from_user.id)
     await message.answer(SubscriptionService.format_status(subscription))
+
+
+@router.message(Command("link"))
+@router.message(F.text == BTN_MY_LINK)
+async def my_link(message: Message) -> None:
+    """Show the protected connection link for the active subscription."""
+    if message.from_user is None:
+        await message.answer("Не удалось определить пользователя.")
+        return
+
+    subscription = await SubscriptionService().get_active_subscription(message.from_user.id)
+    if subscription is None:
+        await message.answer(SubscriptionService.format_status(subscription))
+        return
+
+    vpn_config = subscription.vpn_config or {}
+    link = vpn_config.get("connection_link") or vpn_config.get("subscription_url")
+    if not isinstance(link, str) or not link:
+        await message.answer(SubscriptionService.format_status(None))
+        return
+
+    await message.answer(
+        "🔗 Ваша ссылка для защищённого соединения:\n"
+        f"<code>{escape(link)}</code>"
+    )
 
 
 @router.message(F.text == "Админ")
