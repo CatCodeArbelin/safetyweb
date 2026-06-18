@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -51,6 +52,14 @@ class PaymentStatus(StrEnum):
     FAILED = "failed"
     REFUNDED = "refunded"
     EXPIRED = "expired"
+
+
+class PaymentWebhookHandlingState(StrEnum):
+    """Available payment webhook event handling states."""
+
+    PENDING = "pending"
+    PROCESSED = "processed"
+    FAILED = "failed"
 
 
 class User(Base):
@@ -376,3 +385,56 @@ class Payment(Base):
 
     user: Mapped[User] = relationship(back_populates="payments")
     subscription: Mapped[Subscription | None] = relationship(back_populates="payments")
+    webhook_events: Mapped[list["PaymentWebhookEvent"]] = relationship(
+        back_populates="payment"
+    )
+
+
+class PaymentWebhookEvent(Base):
+    """Persisted payment provider webhook event for idempotent handling."""
+
+    __tablename__ = "payment_webhook_events"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "payload_hash",
+            name="uq_payment_webhook_events_provider_payload_hash",
+        ),
+        CheckConstraint(
+            "handling_state IN ('pending', 'processed', 'failed')",
+            name="ck_payment_webhook_events_handling_state",
+        ),
+        Index("ix_payment_webhook_events_provider_payment_id", "provider_payment_id"),
+        Index("ix_payment_webhook_events_handling_state", "handling_state"),
+        Index(
+            "ix_payment_webhook_events_provider_handling_state",
+            "provider",
+            "handling_state",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_payment_id: Mapped[str | None] = mapped_column(String(255))
+    payment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("payments.id", ondelete="SET NULL")
+    )
+    event_status: Mapped[str | None] = mapped_column(String(64))
+    payload_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    headers: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    raw_body: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    handling_state: Mapped[PaymentWebhookHandlingState] = mapped_column(
+        String(32),
+        default=PaymentWebhookHandlingState.PENDING,
+        server_default=PaymentWebhookHandlingState.PENDING.value,
+        nullable=False,
+    )
+    processing_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    payment: Mapped[Payment | None] = relationship(back_populates="webhook_events")
