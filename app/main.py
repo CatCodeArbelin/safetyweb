@@ -633,13 +633,16 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
     months = int(months_raw)
     payment_service = PaymentService()
     status = await payment_service.get_payment_status(provider_payment_id)
+    payment = None
     if status == PaymentStatus.PAID:
-        await callback.answer("Платёж уже был подтверждён ранее", show_alert=True)
-        await callback.message.answer(
-            f"Платёж <code>{escape(provider_payment_id)}</code> уже был подтверждён ранее. "
-            "Повторная выдача доступа не выполнена."
-        )
-        return
+        payment = await payment_service.get_manual_payment(provider_payment_id)
+        if payment.subscription_id is not None:
+            await callback.answer("Платёж уже подтверждён ранее", show_alert=True)
+            await callback.message.answer(
+                f"Платёж <code>{escape(provider_payment_id)}</code> уже подтверждён ранее. "
+                "Повторная выдача доступа не выполнена."
+            )
+            return
     if status in {PaymentStatus.REFUNDED, PaymentStatus.FAILED}:
         await callback.answer("Платёж нельзя подтвердить в этом статусе", show_alert=True)
         return
@@ -647,7 +650,8 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
     user_id = None
     vpn_service = None
     try:
-        payment = await payment_service.confirm_manual_payment(provider_payment_id)
+        if payment is None:
+            payment = await payment_service.confirm_manual_payment(provider_payment_id)
         user_id = payment.user.telegram_id
         vpn_service = VpnService(settings=settings)
         provision_result = await vpn_service.provision_or_extend_client(

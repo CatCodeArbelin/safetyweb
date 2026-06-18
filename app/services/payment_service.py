@@ -100,6 +100,14 @@ class ManualPaymentProvider(PaymentProvider):
             await session.commit()
             return payment
 
+    async def get_payment(self, provider_payment_id: str) -> Payment:
+        """Return a manual payment with its user loaded."""
+        if self.session is not None:
+            return await self._get_payment(self.session, provider_payment_id)
+
+        async with async_session_maker() as session:
+            return await self._get_payment(session, provider_payment_id)
+
     async def confirm_payment(self, provider_payment_id: str) -> Payment:
         """Confirm a manual payment after an admin verifies it."""
         paid_at = datetime.now(tz=UTC)
@@ -239,6 +247,13 @@ class PaymentService:
     async def refund_payment(self, provider_payment_id: str) -> Payment:
         """Refund a payment through the configured provider."""
         return await self.provider.refund_payment(provider_payment_id)
+
+    async def get_manual_payment(self, provider_payment_id: str) -> Payment:
+        """Return a manual payment with its user and subscription id loaded."""
+        if not isinstance(self.provider, ManualPaymentProvider):
+            msg = "Manual payment lookup is only available for the manual provider"
+            raise TypeError(msg)
+        return await self.provider.get_payment(provider_payment_id)
 
     async def confirm_manual_payment(self, provider_payment_id: str) -> Payment:
         """Confirm a manual payment after admin verification."""
