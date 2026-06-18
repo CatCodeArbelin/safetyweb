@@ -76,7 +76,7 @@ async def expire_subscriptions(bot: Bot, settings: Settings | None = None) -> No
                 await _safe_send_message(
                     bot,
                     subscription.user.telegram_id,
-                    "Ваша индивидуальная подписка ЛадНет закончилась. Цифровой доступ отключён.",
+                    _expiration_text(subscription.expires_at),
                 )
     finally:
         await xui_client.close()
@@ -173,9 +173,17 @@ async def _create_notification_event(
 ) -> bool:
     statement = (
         insert(SubscriptionNotification)
-        .values(subscription_id=subscription.id, notification_type=notification_type)
+        .values(
+            subscription_id=subscription.id,
+            notification_type=notification_type,
+            period_expires_at=subscription.expires_at,
+        )
         .on_conflict_do_nothing(
-            index_elements=["subscription_id", "notification_type"],
+            index_elements=[
+                "subscription_id",
+                "notification_type",
+                "period_expires_at",
+            ],
         )
     )
     result = await session.execute(statement)
@@ -193,8 +201,19 @@ async def _safe_send_message(bot: Bot, telegram_id: int, text: str) -> None:
 def _reminder_text(days_before: int, expires_at: datetime) -> str:
     expires_text = expires_at.strftime("%d.%m.%Y %H:%M UTC")
     if days_before == 0:
-        return f"Ваша индивидуальная подписка ЛадНет заканчивается сегодня ({expires_text})."
+        return (
+            "Срок действия вашей индивидуальной подписки ЛадНет истекает "
+            f"сегодня ({expires_text})."
+        )
     return (
-        f"Ваша индивидуальная подписка ЛадНет закончится через {days_before} дн. "
-        f"({expires_text}). Продлите её, чтобы доступ не прервался."
+        "Срок действия вашей индивидуальной подписки ЛадНет истекает "
+        f"через {days_before} дн. ({expires_text})."
+    )
+
+
+def _expiration_text(expires_at: datetime) -> str:
+    expires_text = expires_at.strftime("%d.%m.%Y %H:%M UTC")
+    return (
+        "Срок действия вашей индивидуальной подписки ЛадНет "
+        f"истёк ({expires_text})."
     )
