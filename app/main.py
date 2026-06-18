@@ -1,6 +1,7 @@
 """Application entry point."""
 
 import asyncio
+from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from html import escape
@@ -12,6 +13,8 @@ from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.redis import RedisStorage
+import uvicorn
+
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -22,6 +25,7 @@ from aiogram.types import (
 )
 
 from app.config import Settings
+from app.http_app import create_app
 from app.db.repositories import SubscriptionRepository, UserRepository
 from app.db.session import async_session_maker
 from app.services.benefit_service import BenefitService
@@ -1354,11 +1358,31 @@ async def main() -> None:
     dispatcher.include_router(router)
     scheduler = create_scheduler(bot=bot, settings=settings)
     scheduler.start()
+    server: uvicorn.Server | None = None
+    http_task: asyncio.Task[None] | None = None
+
+    if settings.payment_provider == "platega" and not settings.test_mode:
+        config = uvicorn.Config(
+            create_app(settings=settings, bot=bot),
+            host=settings.app_http_host,
+            port=settings.app_http_port,
+            log_level="info",
+        )
+        server = uvicorn.Server(config)
+        http_task = asyncio.create_task(server.serve())
 
     try:
         await dispatcher.start_polling(bot, settings=settings)
     finally:
         scheduler.shutdown(wait=False)
+        if server is not None and http_task is not None:
+            server.should_exit = True
+            try:
+                await asyncio.wait_for(http_task, timeout=10)
+            except TimeoutError:
+                http_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await http_task
 
 
 if __name__ == "__main__":
