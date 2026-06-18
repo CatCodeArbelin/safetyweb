@@ -929,14 +929,15 @@ async def create_payment_request(
     final_price = apply_discount_to_price(base_price, discount_percent)
     discount_summary = format_discount_summary(base_price, discount_percent, final_price)
 
-    payment_service = PaymentService()
-    payment = await payment_service.create_payment(
+    payment_service = PaymentService(settings=settings)
+    payment_result = await payment_service.create_payment(
         user_id=user.id,
         tariff_id=months,
         amount=final_price,
         currency=PAYMENT_CURRENCY,
     )
-    await state.update_data(months=months, payment_id=payment.provider_payment_id)
+    payment = payment_result.payment
+    await state.update_data(months=months, payment_id=payment_result.provider_payment_id)
     admin_title = (
         "Новая заявка на продление подписки"
         if active_subscription is not None
@@ -991,7 +992,7 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
 
     _, provider_payment_id, months_raw = (callback.data or "").split(":", maxsplit=2)
     months = int(months_raw)
-    payment_service = PaymentService()
+    payment_service = PaymentService(settings=settings)
     status = await payment_service.get_payment_status(provider_payment_id)
     payment = None
     if status == PaymentStatus.PAID:
