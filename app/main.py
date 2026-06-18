@@ -1027,7 +1027,11 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
         finalization_result = await PaymentFinalizationService(
             settings=settings,
             bot=callback.bot,
-        ).finalize_paid_payment(provider_payment_id, months)
+        ).finalize_paid_payment(
+            provider="manual",
+            provider_payment_id=provider_payment_id,
+            source="manual_confirm",
+        )
     except ValueError:
         await callback.answer("Платёж нельзя подтвердить в этом статусе", show_alert=True)
         return
@@ -1133,7 +1137,8 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
             f"<code>{escape(provision_result.connection_link)}</code>"
         )
 
-    await callback.bot.send_message(user_id, user_confirmation_text)
+    if not (payment.provider_data or {}).get("user_notified_at"):
+        await callback.bot.send_message(user_id, user_confirmation_text)
     admin_action_text = (
         "создана новая подписка"
         if provision_result.action == "created"
