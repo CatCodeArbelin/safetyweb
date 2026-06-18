@@ -919,7 +919,7 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
         paid_amount,
     )
     benefit_granted_text = (
-        "Вам выдана скидка раннего покупателя для следующих оплат 🎁\n\n"
+        "Вам доступна постоянная скидка раннего пользователя 🎁\n\n"
         if benefit_granted
         else ""
     )
