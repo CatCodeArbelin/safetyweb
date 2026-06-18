@@ -10,6 +10,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -49,6 +50,7 @@ class PaymentStatus(StrEnum):
     PAID = "paid"
     FAILED = "failed"
     REFUNDED = "refunded"
+    EXPIRED = "expired"
 
 
 class User(Base):
@@ -327,8 +329,14 @@ class Payment(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'paid', 'failed', 'refunded')",
+            "status IN ('pending', 'paid', 'failed', 'refunded', 'expired')",
             name="ck_payments_status",
+        ),
+        Index(
+            "ix_payments_provider_status_provider_expires_at",
+            "provider",
+            "status",
+            "provider_expires_at",
         ),
     )
 
@@ -351,7 +359,13 @@ class Payment(Base):
     currency: Mapped[str] = mapped_column(
         String(3), default="RUB", server_default="RUB", nullable=False
     )
+    tariff_months: Mapped[int | None] = mapped_column(Integer)
     description: Mapped[str | None] = mapped_column(Text)
+    provider_redirect_url: Mapped[str | None] = mapped_column(String(2048))
+    provider_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_payment_method: Mapped[str | None] = mapped_column(String(255))
+    provider_data: Mapped[dict | None] = mapped_column(JSONB)
+    status_reason: Mapped[str | None] = mapped_column(Text)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
