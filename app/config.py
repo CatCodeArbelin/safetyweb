@@ -1,9 +1,9 @@
 """Application configuration."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import quote_plus
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -57,17 +57,52 @@ class Settings(BaseSettings):
     terms_url: str = "https://telegra.ph/Polzovatelskoe-soglashenie-LadNet-06-16"
     tariffs_url: str = "https://telegra.ph/Tarify-i-usloviya-oplaty-LadNet-06-16"
     admin_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
-    payment_provider: str = "manual"
+    payment_provider: Literal["manual", "platega"] = "manual"
+    app_http_host: str = "0.0.0.0"
+    app_http_port: int = 8000
+    platega_base_url: str = "https://app.platega.io"
+    platega_merchant_id: str | None = None
+    platega_api_key: SecretStr | None = None
+    platega_callback_secret: SecretStr | None = None
+    platega_payment_method: str | None = None
+    platega_return_url: str | None = None
+    platega_failed_url: str | None = None
+    platega_callback_path: str = "/payments/platega/callback"
+    platega_test_mode: bool = False
+    platega_reconcile_interval_seconds: int = 300
+    platega_webhook_retry_interval_seconds: int = 60
 
-    @field_validator("payment_provider")
+    @field_validator("payment_provider", mode="before")
     @classmethod
-    def validate_payment_provider(cls, value: str) -> str:
-        """Validate selected payment provider."""
-        normalized = value.lower()
-        if normalized not in {"manual", "platega"}:
-            msg = "PAYMENT_PROVIDER must be either 'manual' or 'platega'"
-            raise ValueError(msg)
-        return normalized
+    def normalize_payment_provider(cls, value: str) -> str:
+        """Normalize selected payment provider."""
+        return value.lower() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_platega_settings(self) -> "Settings":
+        """Validate Platega settings and default callback secret."""
+        if self.platega_callback_secret is None:
+            self.platega_callback_secret = self.platega_api_key
+
+        if self.payment_provider == "platega":
+            missing_fields = [
+                field_name
+                for field_name in (
+                    "platega_merchant_id",
+                    "platega_api_key",
+                    "platega_return_url",
+                    "platega_failed_url",
+                )
+                if getattr(self, field_name) in (None, "")
+            ]
+            if missing_fields:
+                msg = (
+                    "Platega payment provider requires: "
+                    + ", ".join(missing_fields)
+                )
+                raise ValueError(msg)
+
+        return self
 
     @field_validator("xui_expired_client_policy")
     @classmethod
