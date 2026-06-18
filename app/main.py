@@ -206,6 +206,20 @@ async def notify_admins(bot: Bot, settings: Settings, text: str) -> None:
         await bot.send_message(admin_id, text)
 
 
+async def is_trial_available(telegram_id: int, settings: Settings) -> bool:
+    """Return whether a user can receive one-time trial access."""
+    if not settings.trial_access_enabled:
+        return False
+
+    async with async_session_maker() as session:
+        user = await UserRepository(session).get_by_telegram_id(telegram_id)
+        if user is None or user.trial_used_at is not None:
+            return False
+
+    active_subscription = await SubscriptionService().get_active_subscription(telegram_id)
+    return active_subscription is None
+
+
 def format_access_error_alert(
     error: Exception,
     *,
@@ -337,11 +351,18 @@ async def start(
             message.from_user.id, command.args.removeprefix("ref_")
         )
 
+    telegram_id = message.from_user.id if message.from_user is not None else None
     benefit_granted = False
-    if message.from_user is not None:
+    trial_available = False
+    if telegram_id is not None:
+        async with async_session_maker() as session:
+            await UserRepository(session).get_or_create_from_telegram(message.from_user)
+            await session.commit()
+
         benefit_granted = await BenefitService(
             settings=settings
-        ).grant_early_buyer_discount_on_start_if_eligible(message.from_user.id)
+        ).grant_early_buyer_discount_on_start_if_eligible(telegram_id)
+        trial_available = await is_trial_available(telegram_id, settings)
 
     welcome_text = (
         "🌏 ЛадНет | Безопасный Интернет\n\n"
@@ -353,6 +374,17 @@ async def start(
             "\n\n🎁 Вам доступна постоянная скидка раннего пользователя.\n"
             "Она уже применена к тарифам."
         )
+
+    if trial_available:
+        await message.answer(
+            welcome_text,
+            reply_markup=trial_access_keyboard(),
+        )
+        await message.answer(
+            "Главное меню доступно ниже.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
 
     await message.answer(
         welcome_text,
@@ -1105,14 +1137,10 @@ async def my_profile(message: Message, settings: Settings) -> None:
 
     details = await SubscriptionService().get_status_details(message.from_user.id)
     has_active_subscription = details.subscription is not None
-    trial_available = False
-    if settings.trial_access_enabled and not has_active_subscription:
-        async with async_session_maker() as session:
-            user = await UserRepository(session).get_or_create_from_telegram(
-                message.from_user
-            )
-            trial_available = user.trial_used_at is None
-            await session.commit()
+    async with async_session_maker() as session:
+        await UserRepository(session).get_or_create_from_telegram(message.from_user)
+        await session.commit()
+    trial_available = await is_trial_available(message.from_user.id, settings)
 
     lines = [
         "👤 Мой профиль",
