@@ -127,6 +127,22 @@ class ManualPaymentProvider(PaymentProvider):
             await session.commit()
             return payment
 
+    async def attach_subscription(
+        self, provider_payment_id: str, subscription_id: int
+    ) -> Payment:
+        """Attach a provisioned subscription to a manual payment."""
+        if self.session is not None:
+            return await self._attach_subscription(
+                self.session, provider_payment_id, subscription_id
+            )
+
+        async with async_session_maker() as session:
+            payment = await self._attach_subscription(
+                session, provider_payment_id, subscription_id
+            )
+            await session.commit()
+            return payment
+
     @staticmethod
     async def _create_payment(
         session: AsyncSession,
@@ -180,6 +196,15 @@ class ManualPaymentProvider(PaymentProvider):
         return payment
 
     @staticmethod
+    async def _attach_subscription(
+        session: AsyncSession, provider_payment_id: str, subscription_id: int
+    ) -> Payment:
+        payment = await ManualPaymentProvider._get_payment(session, provider_payment_id)
+        payment.subscription_id = subscription_id
+        await session.flush()
+        return payment
+
+    @staticmethod
     async def _get_or_create_user(session: AsyncSession, telegram_id: int) -> User:
         user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
         if user is not None:
@@ -221,3 +246,12 @@ class PaymentService:
             msg = "Manual confirmation is only available for the manual provider"
             raise TypeError(msg)
         return await self.provider.confirm_payment(provider_payment_id)
+
+    async def attach_subscription(
+        self, provider_payment_id: str, subscription_id: int
+    ) -> Payment:
+        """Attach a provisioned subscription to a confirmed manual payment."""
+        if not isinstance(self.provider, ManualPaymentProvider):
+            msg = "Subscription attachment is only available for the manual provider"
+            raise TypeError(msg)
+        return await self.provider.attach_subscription(provider_payment_id, subscription_id)
