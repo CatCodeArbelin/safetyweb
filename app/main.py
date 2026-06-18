@@ -341,7 +341,7 @@ def payment_url_keyboard(payment_url: str) -> InlineKeyboardMarkup:
     """Build inline keyboard with provider payment URL."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Оплатить подписку", url=payment_url)]
+            [InlineKeyboardButton(text="💳 Перейти к оплате", url=payment_url)]
         ]
     )
 
@@ -1002,13 +1002,24 @@ async def create_payment_request(
 
     if result.provider == "platega" and result.payment_url is not None:
         await state.clear()
+        payment_text = (
+            "Заявка на оплату создана ✅\n\n"
+            f"Тариф: <b>{TARIFFS[months]}</b>\n"
+            f"К оплате: <code>{format_price(final_price)}</code>\n\n"
+            "Нажмите кнопку ниже, чтобы перейти к оплате.\n"
+            "После успешной оплаты доступ будет выдан автоматически."
+        )
+        if active_subscription is not None:
+            payment_text += (
+                "\n\n"
+                "После успешной оплаты текущая подписка будет продлена.\n"
+                "Ссылка для защищённого соединения останется прежней."
+            )
         await callback.message.answer(
-            "Подписка готова. Нажмите кнопку, чтобы открыть ссылку для "
-            "защищённого соединения и оплатить подписку.\n\n"
-            f"{discount_summary}",
+            payment_text,
             reply_markup=payment_url_keyboard(result.payment_url),
         )
-        await callback.answer("Подписка готова")
+        await callback.answer("Заявка на оплату создана")
         return
 
     await callback.answer("Не удалось подготовить подписку", show_alert=True)
