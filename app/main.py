@@ -810,7 +810,7 @@ async def admin_menu(message: Message, settings: Settings) -> None:
         "Админ-меню MVP:\n"
         "• заявки приходят администраторам автоматически;\n"
         "• подтверждение оплаты — кнопкой «✅ Подтвердить оплату» в заявке;\n"
-        "• проверка 3x-ui без создания клиента — командой «XUI debug»."
+        "• диагностика внешнего контура без создания пользователя — командой «XUI debug»."
     )
 
 
@@ -825,7 +825,9 @@ async def xui_debug(message: Message, settings: Settings) -> None:
     try:
         schema = await xui_client.get_openapi()
     except XuiError as error:
-        await message.answer(f"3x-ui debug: ошибка ❌\n<code>{escape(str(error))}</code>")
+        await message.answer(
+            f"Диагностика внешнего контура: ошибка ❌\n<code>{escape(str(error))}</code>"
+        )
         return
     finally:
         await xui_client.close()
@@ -835,7 +837,7 @@ async def xui_debug(message: Message, settings: Settings) -> None:
     paths = schema.get("paths", {})
     paths_count = len(paths) if isinstance(paths, dict) else 0
     await message.answer(
-        "3x-ui debug: OpenAPI доступен ✅\n"
+        "Диагностика внешнего контура: OpenAPI доступен ✅\n"
         f"Схема: <b>{escape(str(title))}</b>\n"
         f"Версия: <code>{escape(str(version))}</code>\n"
         f"Paths: <code>{paths_count}</code>"
