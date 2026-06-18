@@ -149,7 +149,8 @@ def build_platega_payload(
 ) -> dict[str, int | str]:
     """Build an internal payload persisted in Platega transaction metadata."""
     return {
-        "paymentId": payment_id,
+        "v": 1,
+        "internalPaymentId": payment_id,
         "telegramId": telegram_id,
         "months": months,
     }
