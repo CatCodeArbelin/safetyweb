@@ -355,6 +355,24 @@ async def start(
 ) -> None:
     """Handle /start and show the main menu."""
     await state.clear()
+
+    if command.args == "pay_return":
+        await message.answer(
+            "Спасибо! Если оплата прошла успешно, доступ будет выдан автоматически "
+            "в течение нескольких минут.\n\n"
+            "Статус подписки можно проверить в разделе «Мой профиль».",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    if command.args == "pay_failed":
+        await message.answer(
+            "Оплата не была завершена.\n\n"
+            "Вы можете вернуться к выбору тарифа и попробовать ещё раз.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
     if (
         message.from_user is not None
         and command.args
