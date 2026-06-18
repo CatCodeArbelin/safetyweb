@@ -57,6 +57,17 @@ class Settings(BaseSettings):
     terms_url: str = "https://telegra.ph/Polzovatelskoe-soglashenie-LadNet-06-16"
     tariffs_url: str = "https://telegra.ph/Tarify-i-usloviya-oplaty-LadNet-06-16"
     admin_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
+    payment_provider: str = "manual"
+
+    @field_validator("payment_provider")
+    @classmethod
+    def validate_payment_provider(cls, value: str) -> str:
+        """Validate selected payment provider."""
+        normalized = value.lower()
+        if normalized not in {"manual", "platega"}:
+            msg = "PAYMENT_PROVIDER must be either 'manual' or 'platega'"
+            raise ValueError(msg)
+        return normalized
 
     @field_validator("xui_expired_client_policy")
     @classmethod
