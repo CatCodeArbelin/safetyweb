@@ -12,16 +12,22 @@ from sqlalchemy.orm import selectinload
 
 from app.config import Settings
 from app.db.models import (
+    PaymentStatus,
     Subscription,
     SubscriptionNotification,
     SubscriptionNotificationType,
     SubscriptionStatus,
 )
+from app.db.repositories.payments import PaymentRepository
 from app.db.session import async_session_maker
+from app.services.payment_service import PLATEGA_PROVIDER_NAME
+from app.services.platega_client import PlategaClient
+from app.services.platega_webhook_service import PlategaWebhookService
 from app.services.xui_client import XuiClient
 
 EXPIRATION_JOB_ID: Final = "expire_subscriptions"
 EXPIRATION_REMINDER_JOB_ID: Final = "subscription_expiration_reminders"
+PLATEGA_RECONCILE_JOB_ID: Final = "platega_reconcile_payments"
 REMINDER_WINDOWS: Final[tuple[tuple[int, SubscriptionNotificationType], ...]] = (
     (3, SubscriptionNotificationType.EXPIRES_IN_3_DAYS),
     (1, SubscriptionNotificationType.EXPIRES_IN_1_DAY),
@@ -52,7 +58,50 @@ def create_scheduler(bot: Bot | None = None, settings: Settings | None = None) -
         replace_existing=True,
         kwargs={"bot": bot},
     )
+    scheduler.add_job(
+        reconcile_platega_payments,
+        "interval",
+        seconds=app_settings.platega_reconcile_interval_seconds,
+        id=PLATEGA_RECONCILE_JOB_ID,
+        replace_existing=True,
+        kwargs={"bot": bot, "settings": app_settings},
+    )
     return scheduler
+
+
+async def reconcile_platega_payments(bot: Bot, settings: Settings | None = None) -> None:
+    """Reconcile pending Platega payments against provider transaction status."""
+    app_settings = settings or Settings()
+    now = datetime.now(tz=UTC)
+    async with async_session_maker() as session:
+        repository = PaymentRepository(session)
+        expired_payments = await repository.get_expired_pending_platega(now)
+        for payment in expired_payments:
+            payment.status = PaymentStatus.EXPIRED
+            payment.status_reason = "expired_locally"
+        await session.commit()
+
+        pending_payments = await repository.get_pending_by_provider(PLATEGA_PROVIDER_NAME)
+
+    if not pending_payments:
+        return
+
+    client = PlategaClient(settings=app_settings)
+    service = PlategaWebhookService(settings=app_settings, bot=bot, client=client)
+    try:
+        for payment in pending_payments:
+            if not payment.provider_payment_id:
+                continue
+            transaction = await client.get_transaction(payment.provider_payment_id)
+            status = service._extract_transaction_status(transaction)
+            await service.process_transaction_status(
+                payment.provider_payment_id,
+                status,
+                months=payment.tariff_months,
+                transaction=transaction,
+            )
+    finally:
+        await client.close()
 
 
 async def expire_subscriptions(bot: Bot, settings: Settings | None = None) -> None:
