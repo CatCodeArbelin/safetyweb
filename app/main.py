@@ -299,10 +299,26 @@ async def start(
         await ReferralService(settings=settings).register_referral(
             message.from_user.id, command.args.removeprefix("ref_")
         )
-    await message.answer(
+
+    benefit_granted = False
+    if message.from_user is not None:
+        benefit_granted = await BenefitService(
+            settings=settings
+        ).grant_early_buyer_discount_on_start_if_eligible(message.from_user.id)
+
+    welcome_text = (
         "🌏 ЛадНет | Безопасный Интернет\n\n"
         "Цифровой сервис защищённого сетевого доступа.\n"
-        "Нажмите «🛒 Оформить / продлить», проверьте подписку или обратитесь в поддержку.",
+        "Нажмите «🛒 Оформить / продлить», проверьте подписку или обратитесь в поддержку."
+    )
+    if benefit_granted:
+        welcome_text += (
+            "\n\n🎁 Вам доступна постоянная скидка раннего пользователя.\n"
+            "Она уже применена к тарифам."
+        )
+
+    await message.answer(
+        welcome_text,
         reply_markup=main_menu_keyboard(),
     )
 

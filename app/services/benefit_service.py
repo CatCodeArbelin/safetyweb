@@ -43,6 +43,16 @@ class BenefitService:
 
     async def grant_early_buyer_discount_if_eligible(self, telegram_id: int) -> bool:
         """Grant early buyer discount if the promotion is enabled and has capacity."""
+        return await self._grant_early_buyer_discount_if_eligible(telegram_id)
+
+    async def grant_early_buyer_discount_on_start_if_eligible(
+        self, telegram_id: int
+    ) -> bool:
+        """Grant early buyer discount during /start if enabled and available."""
+        return await self._grant_early_buyer_discount_if_eligible(telegram_id)
+
+    async def _grant_early_buyer_discount_if_eligible(self, telegram_id: int) -> bool:
+        """Grant early buyer discount if the promotion is enabled and has capacity."""
         if not self.settings.early_buyer_discount_enabled:
             return False
 
