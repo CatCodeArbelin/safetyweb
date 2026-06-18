@@ -393,6 +393,10 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
     finally:
         await vpn_service.close()
 
+    await payment_service.attach_subscription(
+        provider_payment_id, provision_result.subscription_id
+    )
+
     await callback.bot.send_message(
         user_id,
         "Оплата подтверждена ✅\n\n"
