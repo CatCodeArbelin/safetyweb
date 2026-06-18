@@ -50,6 +50,9 @@ TARIFF_PRICES = {
 }
 
 PAYMENT_CURRENCY = "RUB"
+PROVISIONING_USER_ERROR = (
+    "Не удалось автоматически выдать или продлить доступ из-за технической ошибки..."
+)
 
 BTN_BUY_ACCESS = "🛒 Оформить доступ"
 BTN_MY_SUBSCRIPTION = "📅 Моя подписка"
@@ -126,28 +129,36 @@ def docs_keyboard(settings: Settings) -> InlineKeyboardMarkup:
     )
 
 
-
 def format_provision_expires(result: ProvisionResult) -> str:
     """Format provision expiry timestamp for bot messages."""
     return escape(result.expires_at.strftime("%Y-%m-%d %H:%M UTC"))
 
 
-async def notify_admins_about_provisioning_error(
-    bot: Bot,
-    settings: Settings,
-    context: str,
-    error: Exception,
-) -> None:
-    """Notify administrators about provisioning failures."""
-    error_text = escape(str(error))
-    context_text = escape(context)
+async def notify_admins(bot: Bot, settings: Settings, text: str) -> None:
+    """Send a notification message to every configured administrator."""
     for admin_id in settings.admin_ids:
-        await bot.send_message(
-            admin_id,
-            "Ошибка при изменении цифрового доступа.\n\n"
-            f"Контекст: <code>{context_text}</code>\n"
-            f"Ошибка: <code>{error_text}</code>",
-        )
+        await bot.send_message(admin_id, text)
+
+
+def format_access_error_alert(
+    error: Exception,
+    *,
+    user_id: int | None = None,
+    months: int | None = None,
+    provider_payment_id: str | None = None,
+) -> str:
+    """Format an escaped access provisioning error alert for administrators."""
+    lines = ["🚨 Ошибка выдачи доступа"]
+    if user_id is not None:
+        lines.append(f"Пользователь: <code>{user_id}</code>")
+    if months is not None:
+        tariff = TARIFFS.get(months, f"{months} мес.")
+        lines.append(f"Тариф: <b>{escape(tariff)}</b>")
+        lines.append(f"Месяцев: <code>{months}</code>")
+    if provider_payment_id is not None:
+        lines.append(f"Платёж провайдера: <code>{escape(provider_payment_id)}</code>")
+    lines.append(f"Ошибка: <code>{escape(str(error))}</code>")
+    return "\n".join(lines)
 
 
 def support_contact_text(settings: Settings) -> str:
@@ -369,14 +380,29 @@ async def add_days_command(
             f"Активная подписка для пользователя <code>{telegram_id}</code> не найдена."
         )
         return
-    except Exception as error:
-        await notify_admins_about_provisioning_error(
+    except XuiError as error:
+        await notify_admins(
             message.bot,
             settings,
-            f"/add_days telegram_id={telegram_id} days={days} reason={reason}",
-            error,
+            format_access_error_alert(error, user_id=telegram_id),
         )
-        await message.answer("Не удалось изменить срок доступа. Администраторы уведомлены.")
+        await message.answer(PROVISIONING_USER_ERROR)
+        return
+    except RuntimeError as error:
+        await notify_admins(
+            message.bot,
+            settings,
+            format_access_error_alert(error, user_id=telegram_id),
+        )
+        await message.answer(PROVISIONING_USER_ERROR)
+        return
+    except Exception as error:
+        await notify_admins(
+            message.bot,
+            settings,
+            format_access_error_alert(error, user_id=telegram_id),
+        )
+        await message.answer(PROVISIONING_USER_ERROR)
         return
     finally:
         await vpn_service.close()
@@ -499,6 +525,42 @@ async def create_payment_request(
                 telegram_id=user.id,
                 months=months,
             )
+        except XuiError as error:
+            await notify_admins(
+                bot,
+                settings,
+                format_access_error_alert(error, user_id=user.id, months=months),
+            )
+            await callback.message.answer(
+                PROVISIONING_USER_ERROR,
+                reply_markup=main_menu_keyboard(),
+            )
+            await callback.answer("Техническая ошибка", show_alert=True)
+            return
+        except RuntimeError as error:
+            await notify_admins(
+                bot,
+                settings,
+                format_access_error_alert(error, user_id=user.id, months=months),
+            )
+            await callback.message.answer(
+                PROVISIONING_USER_ERROR,
+                reply_markup=main_menu_keyboard(),
+            )
+            await callback.answer("Техническая ошибка", show_alert=True)
+            return
+        except Exception as error:
+            await notify_admins(
+                bot,
+                settings,
+                format_access_error_alert(error, user_id=user.id, months=months),
+            )
+            await callback.message.answer(
+                PROVISIONING_USER_ERROR,
+                reply_markup=main_menu_keyboard(),
+            )
+            await callback.answer("Техническая ошибка", show_alert=True)
+            return
         finally:
             await vpn_service.close()
 
@@ -579,28 +641,75 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
         await callback.answer("Платёж нельзя подтвердить в этом статусе", show_alert=True)
         return
 
-    payment = await payment_service.confirm_manual_payment(provider_payment_id)
-    user_id = payment.user.telegram_id
-    vpn_service = VpnService(settings=settings)
+    user_id = None
+    vpn_service = None
     try:
+        payment = await payment_service.confirm_manual_payment(provider_payment_id)
+        user_id = payment.user.telegram_id
+        vpn_service = VpnService(settings=settings)
         provision_result = await vpn_service.provision_or_extend_client(
             telegram_id=user_id,
             months=months,
         )
-    finally:
-        await vpn_service.close()
-
-    await payment_service.attach_subscription(
-        provider_payment_id, provision_result.subscription_id
-    )
-    benefit_granted = (
-        await BenefitService(settings=settings).grant_early_buyer_discount_if_eligible(user_id)
-    )
-    referral_rewards = []
-    if not settings.test_mode:
-        referral_rewards = await ReferralService(settings=settings).apply_first_payment_rewards(
-            user_id, months
+        await payment_service.attach_subscription(
+            provider_payment_id, provision_result.subscription_id
         )
+        benefit_granted = await BenefitService(
+            settings=settings
+        ).grant_early_buyer_discount_if_eligible(user_id)
+        referral_rewards = []
+        if not settings.test_mode:
+            referral_rewards = await ReferralService(
+                settings=settings
+            ).apply_first_payment_rewards(user_id, months)
+    except XuiError as error:
+        await notify_admins(
+            callback.bot,
+            settings,
+            format_access_error_alert(
+                error,
+                user_id=user_id,
+                months=months,
+                provider_payment_id=provider_payment_id,
+            ),
+        )
+        if user_id is not None:
+            await callback.bot.send_message(user_id, PROVISIONING_USER_ERROR)
+        await callback.answer("Техническая ошибка", show_alert=True)
+        return
+    except RuntimeError as error:
+        await notify_admins(
+            callback.bot,
+            settings,
+            format_access_error_alert(
+                error,
+                user_id=user_id,
+                months=months,
+                provider_payment_id=provider_payment_id,
+            ),
+        )
+        if user_id is not None:
+            await callback.bot.send_message(user_id, PROVISIONING_USER_ERROR)
+        await callback.answer("Техническая ошибка", show_alert=True)
+        return
+    except Exception as error:
+        await notify_admins(
+            callback.bot,
+            settings,
+            format_access_error_alert(
+                error,
+                user_id=user_id,
+                months=months,
+                provider_payment_id=provider_payment_id,
+            ),
+        )
+        if user_id is not None:
+            await callback.bot.send_message(user_id, PROVISIONING_USER_ERROR)
+        await callback.answer("Техническая ошибка", show_alert=True)
+        return
+    finally:
+        if vpn_service is not None:
+            await vpn_service.close()
     paid_base_price = Decimal(str(TARIFF_PRICES.get(months, payment.amount)))
     paid_amount = Decimal(str(payment.amount))
     paid_discount = paid_base_price - paid_amount
