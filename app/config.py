@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     xui_default_traffic_gb: int = 0
     xui_default_limit_ip: int = 1
     test_mode: bool = False
+    referral_enabled: bool = True
+    referral_new_user_bonus_days: int = 7
+    referral_month_1_bonus_days: int = 7
+    referral_month_3_bonus_days: int = 14
+    referral_month_6_bonus_days: int = 30
+    referral_month_12_bonus_days: int = 60
+    referral_max_bonus_days_per_month: int = 90
     early_buyer_discount_enabled: bool = True
     early_buyer_limit: int = 100
     early_buyer_discount_percent: int = 15

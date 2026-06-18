@@ -3,7 +3,7 @@
 import json
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from secrets import token_hex
 from typing import Any
 from urllib.parse import quote, urlencode
@@ -28,6 +28,7 @@ class ProvisionResult:
     connection_link: str
     expires_at: datetime
     action: str
+    subscription_id: int
 
 
 class VpnService:
@@ -88,6 +89,95 @@ class VpnService:
                 result = await self._create_client(session, telegram_id, months)
             await session.commit()
             return result
+
+
+    async def extend_active_subscription_by_days(
+        self,
+        telegram_id: int,
+        days: int,
+        reason: str = "manual",
+    ) -> ProvisionResult:
+        """Extend a user's active subscription by a number of days."""
+        if days <= 0:
+            msg = "Extension days must be positive"
+            raise ValueError(msg)
+
+        if self.session is not None:
+            subscription = await SubscriptionRepository(
+                self.session
+            ).get_active_by_telegram_id(telegram_id)
+            if subscription is None:
+                msg = f"Active subscription for Telegram user {telegram_id} was not found"
+                raise ValueError(msg)
+            return await self._extend_active_subscription_by_days(
+                self.session, subscription, days, reason
+            )
+
+        async with async_session_maker() as session:
+            subscription = await SubscriptionRepository(session).get_active_by_telegram_id(
+                telegram_id
+            )
+            if subscription is None:
+                msg = f"Active subscription for Telegram user {telegram_id} was not found"
+                raise ValueError(msg)
+            result = await self._extend_active_subscription_by_days(
+                session, subscription, days, reason
+            )
+            await session.commit()
+            return result
+
+    async def _extend_active_subscription_by_days(
+        self,
+        session: AsyncSession,
+        subscription: Any,
+        days: int,
+        reason: str,
+    ) -> ProvisionResult:
+        """Extend an active subscription by days both in X-UI and local storage."""
+        current_expires_at = subscription.expires_at
+        if current_expires_at.tzinfo is None:
+            current_expires_at = current_expires_at.replace(tzinfo=UTC)
+        base_time = max(current_expires_at, datetime.now(UTC))
+        expires_at = base_time + timedelta(days=days)
+        expiry_ms = int(expires_at.timestamp() * 1000)
+
+        vpn_config = dict(subscription.vpn_config or {})
+        client_payload = dict(
+            vpn_config.get("client") or vpn_config.get("provisioned_client") or {}
+        )
+        client_payload["id"] = subscription.xui_client_id
+        client_payload["email"] = subscription.xui_email
+        client_payload["expiryTime"] = expiry_ms
+        client_payload["enable"] = True
+
+        await self.xui_client.update_client(
+            subscription.inbound_id,
+            subscription.xui_client_id,
+            {"clients": [client_payload]},
+            enable=True,
+        )
+
+        vpn_config["client"] = client_payload
+        vpn_config["provisioned_client"] = client_payload
+        vpn_config["expires_at"] = expires_at.isoformat()
+        vpn_config.setdefault("extension_reasons", []).append(
+            {"reason": reason, "days": days, "created_at": datetime.now(UTC).isoformat()}
+        )
+        connection_link = self._existing_connection_link(vpn_config)
+        vpn_config["connection_link"] = connection_link
+        vpn_config.setdefault("subscription_url", connection_link)
+
+        subscription.expires_at = expires_at
+        subscription.vpn_config = vpn_config
+        session.add(subscription)
+        await session.flush()
+
+        return ProvisionResult(
+            connection_link=connection_link,
+            expires_at=expires_at,
+            action="extended",
+            subscription_id=subscription.id,
+        )
 
     async def _create_client(
         self,
@@ -176,7 +266,7 @@ class VpnService:
             },
         )
 
-        await SubscriptionRepository(session).create_active(
+        subscription = await SubscriptionRepository(session).create_active(
             user=user,
             xui_client_id=provisioned_client_id,
             xui_email=email,
@@ -206,6 +296,7 @@ class VpnService:
             connection_link=connection_link,
             expires_at=expires_at,
             action="created",
+            subscription_id=subscription.id,
         )
 
     async def _extend_active_subscription(
@@ -258,6 +349,7 @@ class VpnService:
             connection_link=connection_link,
             expires_at=expires_at,
             action="extended",
+            subscription_id=subscription.id,
         )
 
     def _existing_connection_link(self, vpn_config: dict[str, Any]) -> str:

@@ -79,6 +79,103 @@ class User(Base):
     benefits: Mapped[list["CustomerBenefit"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    referral_code: Mapped["ReferralCode | None"] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    referrals_made: Mapped[list["Referral"]] = relationship(
+        back_populates="referrer",
+        cascade="all, delete-orphan",
+        foreign_keys="Referral.referrer_user_id",
+    )
+    referral: Mapped["Referral | None"] = relationship(
+        back_populates="referred",
+        cascade="all, delete-orphan",
+        foreign_keys="Referral.referred_user_id",
+    )
+    referral_rewards: Mapped[list["ReferralReward"]] = relationship(
+        back_populates="recipient", cascade="all, delete-orphan"
+    )
+
+
+class ReferralCode(Base):
+    """Shareable referral code owned by a Telegram user."""
+
+    __tablename__ = "referral_codes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    user: Mapped[User] = relationship(back_populates="referral_code")
+
+
+class Referral(Base):
+    """Referral relationship between an inviting user and a referred user."""
+
+    __tablename__ = "referrals"
+
+    __table_args__ = (
+        UniqueConstraint("referred_user_id", name="uq_referrals_referred_user"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    referrer_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    referred_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    referral_code_id: Mapped[int | None] = mapped_column(
+        ForeignKey("referral_codes.id", ondelete="SET NULL"), nullable=True
+    )
+    first_paid_months: Mapped[int | None] = mapped_column(Integer)
+    first_paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    referrer: Mapped[User] = relationship(
+        back_populates="referrals_made", foreign_keys=[referrer_user_id]
+    )
+    referred: Mapped[User] = relationship(
+        back_populates="referral", foreign_keys=[referred_user_id]
+    )
+    referral_code: Mapped[ReferralCode | None] = relationship()
+    rewards: Mapped[list["ReferralReward"]] = relationship(
+        back_populates="referral", cascade="all, delete-orphan"
+    )
+
+
+class ReferralReward(Base):
+    """Granted referral subscription extension reward."""
+
+    __tablename__ = "referral_rewards"
+
+    __table_args__ = (
+        UniqueConstraint("referral_id", "reward_type", name="uq_referral_rewards_once"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    referral_id: Mapped[int] = mapped_column(
+        ForeignKey("referrals.id", ondelete="CASCADE"), nullable=False
+    )
+    recipient_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    reward_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    bonus_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    referral: Mapped[Referral] = relationship(back_populates="rewards")
+    recipient: Mapped[User] = relationship(back_populates="referral_rewards")
 
 
 class CustomerBenefit(Base):
