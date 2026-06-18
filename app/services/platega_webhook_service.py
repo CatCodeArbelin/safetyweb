@@ -16,29 +16,39 @@ if TYPE_CHECKING:
     from aiogram import Bot
 
 
+def map_platega_status(status: str | None) -> PaymentStatus:
+    """Map Platega transaction status to the local payment status enum."""
+    normalized = (status or "").strip().upper()
+    if normalized == "PENDING":
+        return PaymentStatus.PENDING
+    if normalized == "CONFIRMED":
+        return PaymentStatus.PAID
+    if normalized == "CANCELED":
+        return PaymentStatus.FAILED
+    if normalized == "CHARGEBACKED":
+        return PaymentStatus.REFUNDED
+
+    aliases = {
+        "PAID": PaymentStatus.PAID,
+        "SUCCESS": PaymentStatus.PAID,
+        "SUCCEEDED": PaymentStatus.PAID,
+        "COMPLETED": PaymentStatus.PAID,
+        "COMPLETE": PaymentStatus.PAID,
+        "FAILED": PaymentStatus.FAILED,
+        "FAIL": PaymentStatus.FAILED,
+        "CANCELLED": PaymentStatus.FAILED,
+        "DECLINED": PaymentStatus.FAILED,
+        "ERROR": PaymentStatus.FAILED,
+        "TIMEOUT": PaymentStatus.FAILED,
+        "TIMED_OUT": PaymentStatus.FAILED,
+        "CHARGEBACK": PaymentStatus.REFUNDED,
+        "REFUNDED": PaymentStatus.REFUNDED,
+    }
+    return aliases.get(normalized, PaymentStatus.PENDING)
+
+
 class PlategaWebhookService:
     """Process persisted Platega webhook events outside the HTTP handler."""
-
-    PAID_STATUSES = {
-        "paid",
-        "success",
-        "succeeded",
-        "completed",
-        "complete",
-        "confirmed",
-    }
-    FAILED_STATUSES = {
-        "failed",
-        "fail",
-        "canceled",
-        "cancelled",
-        "declined",
-        "error",
-        "expired",
-        "timeout",
-        "timed_out",
-    }
-    CHARGEBACK_STATUS = "chargebacked"
 
     def __init__(
         self,
@@ -170,9 +180,10 @@ class PlategaWebhookService:
         transaction: dict[str, Any] | None = None,
     ) -> bool:
         """Apply a Platega transaction status using the shared payment processor."""
-        normalized_status = self._normalize_status(
+        transaction_status = (
             self._extract_transaction_status(transaction or {}) or status
         )
+        mapped_status = map_platega_status(transaction_status)
         async with async_session_maker() as session:
             repository = PaymentRepository(session)
             payment = await repository.get_by_provider_payment_id_for_update(
@@ -182,7 +193,7 @@ class PlategaWebhookService:
             if payment is None:
                 return False
 
-            if normalized_status in self.PAID_STATUSES:
+            if mapped_status == PaymentStatus.PAID:
                 payment_months = months or payment.tariff_months
                 if not payment_months:
                     msg = f"Cannot determine tariff months for Platega payment {payment.id}"
@@ -194,7 +205,7 @@ class PlategaWebhookService:
                 ).finalize_paid_payment(provider_payment_id, payment_months)
                 return True
 
-            if normalized_status == self.CHARGEBACK_STATUS:
+            if mapped_status == PaymentStatus.REFUNDED:
                 payment.status = PaymentStatus.REFUNDED
                 payment.status_reason = "chargebacked"
                 await session.commit()
@@ -205,10 +216,12 @@ class PlategaWebhookService:
                 )
                 return True
 
-            if normalized_status in self.FAILED_STATUSES:
+            if mapped_status == PaymentStatus.FAILED:
                 if payment.status != PaymentStatus.PAID:
                     payment.status = PaymentStatus.FAILED
-                    payment.status_reason = f"{status_reason_prefix}: {status}"
+                    payment.status_reason = (
+                        f"{status_reason_prefix}: {transaction_status}"
+                    )
                 await session.commit()
                 return True
 
@@ -283,10 +296,6 @@ class PlategaWebhookService:
             if isinstance(value, str) and value.strip():
                 return value
         return None
-
-    @staticmethod
-    def _normalize_status(status: str | None) -> str:
-        return (status or "").strip().lower()
 
     @staticmethod
     def _sanitize_error(error: Exception) -> str:
