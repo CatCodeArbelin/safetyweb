@@ -56,9 +56,11 @@ ADMIN_IDS=123456789,987654321
 
 # Free test mode: users receive digital access links without payment/admin confirmation.
 TEST_MODE=false
+# Dev/debug only: allow referral rewards during TEST_MODE.
+TEST_MODE_REFERRAL_REWARDS_ENABLED=false
 ```
 
-Дополнительно можно переопределить `POSTGRES_HOST`, `POSTGRES_PORT`, `REDIS_URL`, `XUI_EXPIRED_CLIENT_POLICY` и `TEST_MODE`. В Docker Compose значения `POSTGRES_HOST`, `POSTGRES_PORT` и `REDIS_URL` для контейнера бота задаются автоматически и указывают на сервисы `postgres` и `redis`.
+Дополнительно можно переопределить `POSTGRES_HOST`, `POSTGRES_PORT`, `REDIS_URL`, `XUI_EXPIRED_CLIENT_POLICY`, `TEST_MODE` и `TEST_MODE_REFERRAL_REWARDS_ENABLED`. В Docker Compose значения `POSTGRES_HOST`, `POSTGRES_PORT` и `REDIS_URL` для контейнера бота задаются автоматически и указывают на сервисы `postgres` и `redis`.
 
 ### Обязательные настройки цифрового доступа
 
@@ -224,6 +226,8 @@ TEST_MODE=true
 В тестовом режиме пользователь выбирает тариф и нажимает «Получить тестовый доступ». Бот не создаёт заявку на оплату, не уведомляет администраторов и сразу создаёт пользователя/подписку в базе, активирует цифровой доступ и отправляет ссылку для защищённого соединения пользователю. Для возврата к обычному ручному MVP-сценарию установите `TEST_MODE=false` или удалите переменную.
 
 TEST_MODE — это режим разработки. Он позволяет проверить выдачу и продление цифрового доступа без оплаты. Он не создаёт реальные платежи, не выдаёт скидку раннего покупателя и не засчитывается в реферальную программу.
+
+Для отладки реферальных начислений в тестовом режиме можно отдельно включить `TEST_MODE_REFERRAL_REWARDS_ENABLED=true`. Это dev/debug-флаг для проверки логики реферальных бонусов вместе с `TEST_MODE=true`; он не является пользовательским тестовым доступом и не должен включаться в обычном безопасном тестовом режиме.
 
 > **Важно:** TEST_MODE — режим разработки. Он не должен использоваться как пользовательский тестовый период.
 

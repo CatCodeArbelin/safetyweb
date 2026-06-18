@@ -1061,7 +1061,7 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
         benefit_granted = False
 
     referral_rewards = []
-    if not settings.test_mode:
+    if not settings.test_mode or settings.test_mode_referral_rewards_enabled:
         try:
             referral_rewards = await ReferralService(
                 settings=settings
