@@ -483,11 +483,63 @@ async def invite_friend(message: Message, settings: Settings) -> None:
     )
 
 
-@router.message(F.text == BTN_BUY_ACCESS)
-async def show_tariffs(message: Message, state: FSMContext) -> None:
-    """Show available tariffs."""
+async def send_tariffs_screen(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+    *,
+    user_id: int | None = None,
+) -> None:
+    """Show available tariffs with renewal-aware copy."""
+    _ = settings
+    if user_id is None:
+        if message.from_user is None:
+            await message.answer("Не удалось определить пользователя.")
+            return
+        user_id = message.from_user.id
+
+    subscription = await SubscriptionService().get_active_subscription(user_id)
+    text = (
+        "Ваша подписка уже активна ✅\n\n"
+        "Выберите, на сколько продлить цифровой доступ.\n"
+        "Оставшийся срок сохранится."
+        if subscription is not None
+        else "Выберите срок цифрового доступа:"
+    )
+
     await state.set_state(PurchaseState.choosing_tariff)
-    await message.answer("Выберите срок цифрового доступа:", reply_markup=tariff_keyboard())
+    await message.answer(text, reply_markup=tariff_keyboard())
+
+
+@router.message(Command("renew"))
+@router.message(F.text == BTN_BUY_ACCESS)
+async def show_tariffs(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+) -> None:
+    """Show available tariffs."""
+    await send_tariffs_screen(message, state, settings)
+
+
+@router.callback_query(F.data == "renew")
+async def renew_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+) -> None:
+    """Show available tariffs from renewal callbacks."""
+    if not isinstance(callback.message, Message):
+        await callback.answer("Не удалось открыть тарифы", show_alert=True)
+        return
+
+    await send_tariffs_screen(
+        callback.message,
+        state,
+        settings,
+        user_id=callback.from_user.id,
+    )
+    await callback.answer()
 
 
 @router.callback_query(
