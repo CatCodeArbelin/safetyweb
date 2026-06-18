@@ -454,6 +454,7 @@ async def docs_support(callback: CallbackQuery, settings: Settings) -> None:
     await callback.answer()
 
 
+@router.message(Command("invite"))
 @router.message(F.text == BTN_INVITE_FRIEND)
 async def invite_friend(message: Message, settings: Settings) -> None:
     """Return the user's referral invite link."""
@@ -467,8 +468,16 @@ async def invite_friend(message: Message, settings: Settings) -> None:
     code = await ReferralService(settings=settings).get_or_create_code(message.from_user.id)
     invite_url = f"{settings.bot_public_url}?start=ref_{code}"
     await message.answer(
-        "Пригласите друга и получите бонусные дни после его первой оплаты 🎁\n\n"
-        f"Ваша ссылка:\n<code>{escape(invite_url)}</code>"
+        "🎁 Пригласить друга\n\n"
+        f"Ваша ссылка:\n<code>{escape(invite_url)}</code>\n\n"
+        "Бонусы за приглашение:\n"
+        "• 1 месяц — +3 дня\n"
+        "• 3 месяца — +7 дней\n"
+        "• 6 месяцев — +14 дней\n"
+        "• 12 месяцев — +21 день\n\n"
+        "Новый пользователь получает +3 дня к первой оплаченной подписке.\n\n"
+        "Учитываются только пользователи, оплатившие минимум 1 месяц. "
+        "Тестовый доступ не учитывается."
     )
 
 
