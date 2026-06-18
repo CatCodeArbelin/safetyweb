@@ -25,6 +25,7 @@ from app.db.models import PaymentStatus
 from app.services.benefit_service import BenefitService
 from app.services.payment_service import PaymentService
 from app.services.referral_service import ReferralService
+from app.services.stats_service import AdminStats, StatsService
 from app.services.subscription_service import SubscriptionService
 from app.services.vpn_service import ProvisionResult, VpnService
 from app.services.xui_client import XuiClient, XuiError
@@ -168,6 +169,27 @@ def format_discount_summary(
     )
 
 
+def format_admin_stats(stats: AdminStats, early_buyer_limit: int) -> str:
+    """Format aggregate admin statistics for Telegram."""
+    return (
+        "📊 Статистика ЛадНет\n\n"
+        f"👥 Пользователей всего: <code>{stats.total_users_count}</code>\n"
+        f"✅ Активных подписок: <code>{stats.active_subscriptions_count}</code>\n"
+        f"💳 Оплаченных платежей за текущий месяц: "
+        f"<code>{stats.paid_payments_count_current_month}</code>\n"
+        f"💰 Сумма оплат за текущий месяц: "
+        f"<code>{format_price(stats.paid_payments_sum_current_month)}</code>\n"
+        f"🧾 Оплаченных платежей за всё время: "
+        f"<code>{stats.paid_payments_count_all_time}</code>\n"
+        f"🏦 Сумма оплат за всё время: "
+        f"<code>{format_price(stats.paid_payments_sum_all_time)}</code>\n"
+        f"🎁 Активных скидок раннего покупателя: "
+        f"<code>{stats.active_early_buyer_benefits_count}/{early_buyer_limit}</code>\n"
+        f"🔗 Рефералов всего: <code>{stats.referrals_count}</code>\n"
+        f"🏆 Вознаграждённых рефералов: <code>{stats.rewarded_referrals_count}</code>"
+    )
+
+
 def payment_request_keyboard(months: int, test_mode: bool = False) -> InlineKeyboardMarkup:
     """Build inline keyboard for submitting a payment or test access request."""
     button_text = "🧪 Получить тестовый доступ" if test_mode else "💳 Создать заявку на оплату"
@@ -263,6 +285,17 @@ async def tariffs_command(message: Message, settings: Settings) -> None:
             ]
         ),
     )
+
+
+@router.message(Command("stats"))
+async def stats_command(message: Message, settings: Settings) -> None:
+    """Show aggregate service statistics to administrators only."""
+    if message.from_user is None or message.from_user.id not in settings.admin_ids:
+        await message.answer("Недостаточно прав.")
+        return
+
+    stats = await StatsService().get_admin_stats()
+    await message.answer(format_admin_stats(stats, settings.early_buyer_limit))
 
 
 @router.message(Command("subscription"))
