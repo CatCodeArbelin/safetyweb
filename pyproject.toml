@@ -12,6 +12,8 @@ dependencies = [
     "alembic",
     "redis",
     "httpx",
+    "fastapi",
+    "uvicorn",
     "pydantic-settings",
     "python-dateutil",
     "apscheduler",

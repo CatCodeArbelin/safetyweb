@@ -242,6 +242,23 @@ class PaymentRepository:
             statement = statement.where(PaymentWebhookEvent.provider == provider)
         return list(await self.session.scalars(statement))
 
+    async def get_webhook_event(
+        self, webhook_event_id: int
+    ) -> PaymentWebhookEvent | None:
+        """Load a webhook event by primary key."""
+        return await self.session.get(PaymentWebhookEvent, webhook_event_id)
+
+    async def get_webhook_event_by_payload_hash(
+        self, provider: str, payload_hash: str
+    ) -> PaymentWebhookEvent | None:
+        """Load a webhook event by provider and payload hash."""
+        return await self.session.scalar(
+            select(PaymentWebhookEvent).where(
+                PaymentWebhookEvent.provider == provider,
+                PaymentWebhookEvent.payload_hash == payload_hash,
+            )
+        )
+
     async def mark_webhook_processed(
         self, webhook_event_id: int, processed_at: datetime
     ) -> PaymentWebhookEvent | None:
