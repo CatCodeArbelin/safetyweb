@@ -524,11 +524,17 @@ async def send_tariffs_screen(
         else "Выберите срок цифрового доступа:"
     )
 
-    discount_percent = (
-        0
-        if settings.test_mode
-        else await BenefitService(settings=settings).get_active_discount_percent(user_id)
-    )
+    if settings.test_mode:
+        text = (
+            f"{text}\n\n"
+            "Тестовый режим включён: оплата не потребуется.\n"
+            "Скидки и реальные платежи в тестовом режиме не применяются."
+        )
+        discount_percent = 0
+    else:
+        discount_percent = await BenefitService(
+            settings=settings
+        ).get_active_discount_percent(user_id)
 
     await state.set_state(PurchaseState.choosing_tariff)
     await message.answer(text, reply_markup=tariff_keyboard(discount_percent))
