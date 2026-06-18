@@ -65,6 +65,7 @@ class VpnService:
         self,
         telegram_id: int,
         months: int,
+        source_payment_id: str | None = None,
     ) -> ProvisionResult:
         """Create a new subscription or extend the user's active one."""
         if self.session is not None:
@@ -76,8 +77,11 @@ class VpnService:
                     self.session,
                     subscription,
                     months,
+                    source_payment_id=source_payment_id,
                 )
-            return await self._create_client(self.session, telegram_id, months)
+            return await self._create_client(
+                self.session, telegram_id, months, source_payment_id=source_payment_id
+            )
 
         async with async_session_maker() as session:
             subscription = await SubscriptionRepository(session).get_active_by_telegram_id(
@@ -88,9 +92,12 @@ class VpnService:
                     session,
                     subscription,
                     months,
+                    source_payment_id=source_payment_id,
                 )
             else:
-                result = await self._create_client(session, telegram_id, months)
+                result = await self._create_client(
+                    session, telegram_id, months, source_payment_id=source_payment_id
+                )
             await session.commit()
             return result
 
@@ -188,6 +195,7 @@ class VpnService:
         session: AsyncSession,
         telegram_id: int,
         months: int,
+        source_payment_id: str | None = None,
     ) -> ProvisionResult:
         """Provision a 3x-ui client and persist the matching subscription."""
         if months not in self.ALLOWED_TARIFF_MONTHS:
@@ -279,6 +287,9 @@ class VpnService:
             traffic_limit_gb=self.settings.xui_default_traffic_gb,
             vpn_config={
                 "email": email,
+                **self._payment_marker_config(
+                    source_payment_id, months, "created", datetime.now(UTC)
+                ),
                 "subId": sub_id,
                 "subscription_url": connection_link,
                 "inboundIds": inbound_ids,
@@ -308,6 +319,7 @@ class VpnService:
         session: AsyncSession,
         subscription: Any,
         months: int,
+        source_payment_id: str | None = None,
     ) -> ProvisionResult:
         """Extend an active subscription both in X-UI and in local storage."""
         if months not in self.ALLOWED_TARIFF_MONTHS:
@@ -340,6 +352,11 @@ class VpnService:
         vpn_config["client"] = client_payload
         vpn_config["provisioned_client"] = client_payload
         vpn_config["expires_at"] = expires_at.isoformat()
+        vpn_config.update(
+            self._payment_marker_config(
+                source_payment_id, months, "extended", datetime.now(UTC)
+            )
+        )
         connection_link = self._existing_connection_link(vpn_config)
         vpn_config["connection_link"] = connection_link
         vpn_config.setdefault("subscription_url", connection_link)
@@ -355,6 +372,42 @@ class VpnService:
             action="extended",
             subscription_id=subscription.id,
         )
+
+    @staticmethod
+    def provision_result_from_subscription(subscription: Any) -> ProvisionResult:
+        """Build a provision result for an already provisioned subscription."""
+        vpn_config = dict(subscription.vpn_config or {})
+        action = vpn_config.get("last_payment_action")
+        if action not in {"created", "extended"}:
+            action = "extended"
+        for key in ("connection_link", "subscription_url"):
+            value = vpn_config.get(key)
+            if isinstance(value, str) and value:
+                return ProvisionResult(
+                    connection_link=value,
+                    expires_at=subscription.expires_at,
+                    action=action,
+                    subscription_id=subscription.id,
+                )
+        msg = "Active subscription does not contain a reusable connection link"
+        raise RuntimeError(msg)
+
+    @staticmethod
+    def _payment_marker_config(
+        source_payment_id: str | None,
+        months: int,
+        action: str,
+        applied_at: datetime,
+    ) -> dict[str, Any]:
+        """Return idempotency metadata for a payment-applied subscription change."""
+        if source_payment_id is None:
+            return {}
+        return {
+            "last_payment_id": source_payment_id,
+            "last_paid_months": months,
+            "last_payment_applied_at": applied_at.isoformat(),
+            "last_payment_action": action,
+        }
 
     def _existing_connection_link(self, vpn_config: dict[str, Any]) -> str:
         """Return or rebuild the persisted connection link for a subscription."""

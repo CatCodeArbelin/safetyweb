@@ -22,6 +22,8 @@ from aiogram.types import (
 
 from app.config import Settings
 from app.db.models import PaymentStatus
+from app.db.repositories import SubscriptionRepository
+from app.db.session import async_session_maker
 from app.services.benefit_service import BenefitService
 from app.services.payment_service import PaymentService
 from app.services.referral_service import ReferralService
@@ -662,11 +664,24 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
         if payment is None:
             payment = await payment_service.confirm_manual_payment(provider_payment_id)
         user_id = payment.user.telegram_id
-        vpn_service = VpnService(settings=settings)
-        provision_result = await vpn_service.provision_or_extend_client(
-            telegram_id=user_id,
-            months=months,
-        )
+        provision_result = None
+        if status == PaymentStatus.PAID and payment.subscription_id is None:
+            async with async_session_maker() as session:
+                subscription = await SubscriptionRepository(
+                    session
+                ).get_by_last_payment_id(user_id, provider_payment_id)
+                if subscription is not None:
+                    provision_result = VpnService.provision_result_from_subscription(
+                        subscription
+                    )
+
+        if provision_result is None:
+            vpn_service = VpnService(settings=settings)
+            provision_result = await vpn_service.provision_or_extend_client(
+                telegram_id=user_id,
+                months=months,
+                source_payment_id=provider_payment_id,
+            )
         await payment_service.attach_subscription(
             provider_payment_id, provision_result.subscription_id
         )
