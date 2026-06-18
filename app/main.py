@@ -514,17 +514,10 @@ async def send_tariffs_screen(
     message: Message,
     state: FSMContext,
     settings: Settings,
-    *,
-    user_id: int | None = None,
+    telegram_id: int,
 ) -> None:
     """Show available tariffs with renewal-aware copy."""
-    if user_id is None:
-        if message.from_user is None:
-            await message.answer("Не удалось определить пользователя.")
-            return
-        user_id = message.from_user.id
-
-    subscription = await SubscriptionService().get_active_subscription(user_id)
+    subscription = await SubscriptionService().get_active_subscription(telegram_id)
     text = (
         "Ваша подписка уже активна ✅\n\n"
         "Выберите, на сколько продлить цифровой доступ.\n"
@@ -543,7 +536,7 @@ async def send_tariffs_screen(
     else:
         discount_percent = await BenefitService(
             settings=settings
-        ).get_active_discount_percent(user_id)
+        ).get_active_discount_percent(telegram_id)
 
     await state.set_state(PurchaseState.choosing_tariff)
     await message.answer(text, reply_markup=tariff_keyboard(discount_percent))
@@ -557,17 +550,21 @@ async def show_tariffs(
     settings: Settings,
 ) -> None:
     """Show available tariffs."""
-    await send_tariffs_screen(message, state, settings)
+    if message.from_user is None:
+        await message.answer("Не удалось определить пользователя.")
+        return
+
+    await send_tariffs_screen(message, state, settings, message.from_user.id)
 
 
 @router.callback_query(F.data == "renew")
-async def renew_callback(
+async def renew_subscription(
     callback: CallbackQuery,
     state: FSMContext,
     settings: Settings,
 ) -> None:
     """Show available tariffs from renewal callbacks."""
-    if not isinstance(callback.message, Message):
+    if not isinstance(callback.message, Message) or callback.from_user is None:
         await callback.answer("Не удалось открыть тарифы", show_alert=True)
         return
 
@@ -575,7 +572,7 @@ async def renew_callback(
         callback.message,
         state,
         settings,
-        user_id=callback.from_user.id,
+        callback.from_user.id,
     )
     await callback.answer()
 
