@@ -583,17 +583,23 @@ async def choose_tariff(
         await callback.answer("Неизвестный тариф", show_alert=True)
         return
 
-    discount_percent = (
-        0
-        if settings.test_mode
-        else await BenefitService(settings=settings).get_active_discount_percent(
-            callback.from_user.id
-        )
-    )
-    selected_tariff = (
-        f"{TARIFFS[months]} — "
-        f"{format_tariff_price(TARIFF_PRICES[months], discount_percent)}"
-    )
+    base_price = TARIFF_PRICES[months]
+    if settings.test_mode:
+        selected_tariff = f"{TARIFFS[months]} — {format_tariff_price(base_price, 0)}"
+    else:
+        discount_percent = await BenefitService(
+            settings=settings
+        ).get_active_discount_percent(callback.from_user.id)
+        if discount_percent > 0:
+            final_price = apply_discount_to_price(base_price, discount_percent)
+            selected_tariff = (
+                f"{TARIFFS[months]}\n\n"
+                f"Базовая цена: {format_price(base_price)}\n"
+                f"Скидка: {discount_percent}%\n"
+                f"Итого к оплате: {format_price(final_price)}"
+            )
+        else:
+            selected_tariff = f"{TARIFFS[months]} — {format_price(base_price)}"
     await state.update_data(months=months)
     await state.set_state(PurchaseState.waiting_payment)
     payment_hint = (
