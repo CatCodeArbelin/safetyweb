@@ -40,10 +40,16 @@ class PaymentFinalizationService:
     async def finalize_paid_payment(
         self,
         provider_payment_id: str,
-        months: int,
+        months: int | None = None,
+        *,
+        provider: str | None = None,
+        source: str | None = None,
     ) -> PaymentFinalizationResult:
         """Provision access and rewards for a paid payment idempotently."""
-        provider = await self.payment_service.get_provider_for_payment(provider_payment_id)
+        del source
+        provider = provider or await self.payment_service.get_provider_for_payment(
+            provider_payment_id
+        )
         payment = await self.payment_service.get_payment_by_provider_payment_id(
             provider,
             provider_payment_id,
@@ -59,6 +65,11 @@ class PaymentFinalizationService:
 
         if payment.status in {PaymentStatus.REFUNDED, PaymentStatus.FAILED}:
             msg = f"Payment {provider_payment_id!r} cannot be finalized from {payment.status}"
+            raise ValueError(msg)
+
+        months = months or payment.tariff_months
+        if not months:
+            msg = f"Cannot determine tariff months for payment {provider_payment_id!r}"
             raise ValueError(msg)
 
         if payment.status != PaymentStatus.PAID:
