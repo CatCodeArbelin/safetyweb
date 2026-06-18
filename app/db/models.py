@@ -173,6 +173,9 @@ class ReferralReward(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    applied_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     referral: Mapped[Referral] = relationship(back_populates="rewards")
     recipient: Mapped[User] = relationship(back_populates="referral_rewards")

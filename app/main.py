@@ -710,6 +710,17 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
         if vpn_service is not None:
             await vpn_service.close()
 
+    try:
+        await ReferralService(settings=settings).apply_pending_rewards(user_id)
+    except Exception as error:
+        await notify_admins(
+            callback.bot,
+            settings,
+            "Ошибка применения отложенных реферальных бонусов\n"
+            f"Пользователь: <code>{user_id}</code>\n"
+            f"Ошибка: <code>{escape(str(error))}</code>",
+        )
+
     benefit_granted = False
     try:
         benefit_granted = await BenefitService(
