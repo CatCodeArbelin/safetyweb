@@ -73,16 +73,26 @@ class PlategaWebhookService:
                 return
 
             provider_payment_id = event.provider_payment_id
+            payment = None
+            if provider_payment_id:
+                payment = await repository.get_by_provider_payment_id_for_update(
+                    PLATEGA_PROVIDER_NAME,
+                    provider_payment_id,
+                )
+
+            if payment is None and event.payment_id is not None:
+                payment = await repository.get_for_update(event.payment_id)
+                if payment is not None and payment.provider == PLATEGA_PROVIDER_NAME:
+                    provider_payment_id = payment.provider_payment_id
+                else:
+                    payment = None
+
             if not provider_payment_id:
                 msg = "Platega webhook event does not contain provider payment id"
                 await repository.mark_webhook_failed(webhook_event_id, msg)
                 await session.commit()
                 return
 
-            payment = await repository.get_by_provider_payment_id_for_update(
-                PLATEGA_PROVIDER_NAME,
-                provider_payment_id,
-            )
             if payment is None:
                 msg = f"Platega payment {provider_payment_id!r} was not found"
                 await repository.mark_webhook_failed(webhook_event_id, msg)
@@ -91,6 +101,8 @@ class PlategaWebhookService:
 
             if event.payment_id is None:
                 event.payment_id = payment.id
+            if event.provider_payment_id is None:
+                event.provider_payment_id = provider_payment_id
 
             status = self._normalize_status(event.event_status)
             months = payment.tariff_months

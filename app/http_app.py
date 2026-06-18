@@ -62,13 +62,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         async with async_session_maker() as session:
             repository = PaymentRepository(session)
-            payment_id = None
+            payment_id = _extract_internal_payment_id(payload)
             if provider_payment_id is not None:
                 payment = await repository.get_by_provider_payment_id(
                     PLATEGA_PROVIDER_NAME,
                     provider_payment_id,
                 )
-                payment_id = payment.id if payment is not None else None
+                payment_id = payment.id if payment is not None else payment_id
 
             try:
                 event = await repository.create_webhook_event(
@@ -169,3 +169,28 @@ def _extract_first_str(data: dict[str, Any], *keys: str) -> str | None:
             if value is not None:
                 return value
     return None
+
+
+def _extract_internal_payment_id(data: dict[str, Any]) -> int | None:
+    for value in _candidate_values(data, "internalPaymentId", "paymentId"):
+        try:
+            payment_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if payment_id > 0:
+            return payment_id
+    return None
+
+
+def _candidate_values(data: Any, *keys: str) -> list[Any]:
+    values: list[Any] = []
+    if not isinstance(data, dict):
+        return values
+    for key in keys:
+        if key in data:
+            values.append(data[key])
+    for nested_key in ("payload", "metadata", "data", "transaction"):
+        nested = data.get(nested_key)
+        if isinstance(nested, dict):
+            values.extend(_candidate_values(nested, *keys))
+    return values
