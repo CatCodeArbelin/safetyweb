@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     xui_default_traffic_gb: int = 0
     xui_default_limit_ip: int = 1
     test_mode: bool = False
+    test_mode_referral_rewards_enabled: bool = False
     trial_access_enabled: bool = True
     trial_access_hours: int = 2
     referral_enabled: bool = True
