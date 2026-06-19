@@ -33,6 +33,7 @@ BTN_INSTRUCTION = "📲 Инструкция"
 BTN_SUPPORT = "💬 Поддержка"
 BTN_DOCUMENTS = "📄 Документы"
 BTN_INVITE_FRIEND = "🎁 Пригласить друга"
+BTN_CUSTOM_SERVERS = "🖥 Индивидуальные серверы"
 
 
 # When adding any new slash-command, text admin command, or important user command, update this registry. /ahelp and Telegram command scopes are generated from it.
@@ -153,6 +154,21 @@ BOT_COMMAND_REGISTRY: tuple[BotCommandSpec, ...] = (
         BotCommandCategory.USER_BUTTON,
         BTN_INVITE_FRIEND,
         "получить реферальную ссылку.",
+    ),
+    BotCommandSpec(
+        BotCommandCategory.USER_BUTTON,
+        BTN_CUSTOM_SERVERS,
+        "раздел заявок на семейный или корпоративный индивидуальный доступ.",
+    ),
+    BotCommandSpec(
+        BotCommandCategory.USER_BUTTON,
+        "👨‍👩‍👧 Семейный доступ",
+        "заявка на отдельный серверный ресурс для семьи.",
+    ),
+    BotCommandSpec(
+        BotCommandCategory.USER_BUTTON,
+        "🏢 Корпоративным клиентам",
+        "заявка на решение для команды или организации.",
     ),
     BotCommandSpec(
         BotCommandCategory.USER_BUTTON,

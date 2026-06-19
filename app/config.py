@@ -194,6 +194,11 @@ class Settings(BaseSettings):
     early_buyer_discount_enabled: bool = True
     early_buyer_limit: int = 100
     early_buyer_discount_percent: int = 15
+    custom_servers_enabled: bool = True
+    family_server_price_rub: int = 1490
+    business_server_20_price_rub: int = 3990
+    business_server_40_price_rub: int = 6990
+    router_setup_price_rub: int = 1500
     service_name: str = "ЛадНет"
     service_display_name: str = "🌏 ЛадНет | Безопасный Интернет"
     bot_public_url: str = "https://t.me/LadnetBot"
