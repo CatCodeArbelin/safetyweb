@@ -111,3 +111,99 @@ def test_create_recovery_payment_returns_none_without_amount_or_currency() -> No
         assert missing_currency is None
 
     asyncio.run(run())
+
+
+def test_recover_payment_by_internal_id_records_recovery_metadata() -> None:
+    class Session:
+        async def flush(self) -> None:
+            self.flushed = True
+
+    class Payment:
+        provider_data = {"existing": True}
+        tariff_months = None
+
+    class Repository:
+        def __init__(self) -> None:
+            self.session = Session()
+            self.payment = Payment()
+
+        async def get_for_update(self, payment_id: int) -> Payment | None:
+            self.payment_id = payment_id
+            return self.payment
+
+    async def run() -> None:
+        service = PlategaWebhookService()
+        repository = Repository()
+
+        payment = await service._recover_payment_by_internal_id(
+            repository,
+            "provider-id",
+            {"internalPaymentId": "42", "months": "3"},
+            {"status": "CONFIRMED", "api_key": "secret-value"},
+        )
+
+        assert payment is repository.payment
+        assert repository.payment_id == 42
+        assert payment.provider_payment_id == "provider-id"
+        assert payment.tariff_months == 3
+        assert payment.provider_data == {
+            "existing": True,
+            "recovered_provider_payment_id": "provider-id",
+            "last_status_response": {"status": "CONFIRMED", "api_key": "***"},
+        }
+        assert repository.session.flushed is True
+
+    asyncio.run(run())
+
+
+def test_create_recovery_payment_records_sanitized_payload_metadata(monkeypatch) -> None:
+    import app.services.platega_webhook_service as webhook_module
+
+    class User:
+        id = 7
+
+    class FakeUserRepository:
+        def __init__(self, session: object) -> None:
+            self.session = session
+
+        async def get_or_create(self, telegram_id: int) -> User:
+            self.telegram_id = telegram_id
+            return User()
+
+    class Repository:
+        session = object()
+
+        async def create_payment(self, **kwargs):
+            self.create_kwargs = kwargs
+            return kwargs
+
+    async def run() -> None:
+        monkeypatch.setattr(webhook_module, "UserRepository", FakeUserRepository)
+        service = PlategaWebhookService()
+        repository = Repository()
+
+        payment = await service._create_recovery_payment(
+            repository,
+            "provider-id",
+            {"telegramId": "123", "months": "1", "token": "secret-token"},
+            {
+                "paymentDetails": {"amount": "10.50", "currency": "RUB"},
+                "authorization": "Bearer secret",
+            },
+        )
+
+        assert payment is repository.create_kwargs
+        assert repository.create_kwargs["provider_data"] == {
+            "recovered_from_webhook": True,
+            "last_status_response": {
+                "paymentDetails": {"amount": "10.50", "currency": "RUB"},
+                "authorization": "***",
+            },
+            "recovery_payload": {
+                "telegramId": "123",
+                "months": "1",
+                "token": "***",
+            },
+        }
+
+    asyncio.run(run())
