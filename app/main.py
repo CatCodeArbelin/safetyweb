@@ -29,6 +29,7 @@ from aiogram.types import (
 
 from app.bot_commands import (
     BTN_BUY_ACCESS,
+    BTN_CUSTOM_SERVERS,
     BTN_DOCUMENTS,
     BTN_INSTRUCTION,
     BTN_INVITE_FRIEND,
@@ -115,7 +116,9 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=BTN_BUY_ACCESS), KeyboardButton(text=BTN_PROFILE)],
             [KeyboardButton(text=BTN_INVITE_FRIEND)],
+            [KeyboardButton(text=BTN_CUSTOM_SERVERS)],
             [KeyboardButton(text=BTN_INSTRUCTION), KeyboardButton(text=BTN_SUPPORT)],
+            [KeyboardButton(text=BTN_DOCUMENTS)],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите действие",
@@ -237,6 +240,69 @@ def docs_keyboard(settings: Settings) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="💬 Поддержка", callback_data="docs:support")],
         ]
     )
+
+
+def custom_servers_keyboard() -> InlineKeyboardMarkup:
+    """Build inline keyboard for custom server request section."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="👨‍👩‍👧 Семейный доступ",
+                    callback_data="custom_servers:family",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🏢 Корпоративным клиентам",
+                    callback_data="custom_servers:business",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="💬 Написать в поддержку",
+                    callback_data="custom_servers:support",
+                )
+            ],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="custom_servers:back")],
+        ]
+    )
+
+
+def custom_servers_request_keyboard(request_callback: str, request_text: str) -> InlineKeyboardMarkup:
+    """Build inline keyboard for a specific custom server request type."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=request_text, callback_data=request_callback)],
+            [
+                InlineKeyboardButton(
+                    text="💬 Написать в поддержку",
+                    callback_data="custom_servers:support",
+                )
+            ],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="custom_servers:back")],
+        ]
+    )
+
+
+def custom_servers_intro_text() -> str:
+    """Return the custom server section intro text."""
+    return (
+        "🖥 Индивидуальные серверы\n\n"
+        "Этот раздел для клиентов, которым нужен отдельный серверный ресурс "
+        "под семью, команду или организацию.\n\n"
+        "Варианты:\n\n"
+        "👨‍👩‍👧 Семейный доступ\n"
+        "Для дома, семьи и нескольких личных устройств.\n\n"
+        "🏢 Корпоративный доступ\n"
+        "Для команды, офиса, сотрудников или нескольких рабочих мест.\n\n"
+        "Выберите подходящий вариант ниже — бот отправит заявку поддержке."
+    )
+
+
+def custom_servers_disabled_text() -> str:
+    """Return text for disabled custom server section."""
+    return "Раздел временно недоступен. Пожалуйста, обратитесь в поддержку."
 
 
 def format_capacity_snapshot(snapshot: list[NodeCapacityInfo]) -> str:
@@ -711,6 +777,7 @@ async def help_command(message: Message, settings: Settings) -> None:
         "• 🛒 Оформить / продлить — выбрать тариф и создать заявку на оплату.\n"
         "• 👤 Мой профиль — подписка, ссылка, документы и продление.\n"
         "• 🎁 Пригласить друга — получить реферальную ссылку для приглашения.\n"
+        "• 🖥 Индивидуальные серверы — заявки на семейный или корпоративный индивидуальный доступ.\n"
         "• 📲 Инструкция — открыть краткую инструкцию по настройке.\n"
         "• 💬 Поддержка — посмотреть контакты поддержки.\n\n"
         f"{support_contact_text(settings)}",
@@ -1255,6 +1322,230 @@ async def docs_tariffs(callback: CallbackQuery) -> None:
 async def docs_support(callback: CallbackQuery, settings: Settings) -> None:
     """Show support contacts from the documents menu."""
     await callback.message.answer(support_contact_text(settings))
+    await callback.answer()
+
+
+
+@router.message(F.text == BTN_CUSTOM_SERVERS)
+async def custom_servers_entry(message: Message, settings: Settings) -> None:
+    """Show the custom server request section."""
+    if not settings.custom_servers_enabled:
+        await message.answer(custom_servers_disabled_text())
+        return
+
+    await message.answer(
+        custom_servers_intro_text(),
+        reply_markup=custom_servers_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "custom_servers:family")
+async def custom_servers_family(callback: CallbackQuery, settings: Settings) -> None:
+    """Show family custom server request details."""
+    if not settings.custom_servers_enabled:
+        await callback.message.answer(custom_servers_disabled_text())
+        await callback.answer()
+        return
+
+    await callback.message.answer(
+        "👨‍👩‍👧 Семейный доступ\n\n"
+        "Подходит для дома, семьи и нескольких личных устройств.\n\n"
+        "Что входит:\n\n"
+        "✅ отдельный серверный ресурс под вашу семью;\n"
+        "✅ до 10 одновременных подключений/IP;\n"
+        "✅ персональная ссылка для защищённого соединения;\n"
+        "✅ помощь с первичной настройкой;\n"
+        "✅ можно настроить подключение на роутере Keenetic или DD-WRT;\n"
+        "✅ удобно для телефона, ПК, планшета, телевизора и других домашних устройств.\n\n"
+        "Рекомендуемая цена:\n"
+        f"от {settings.family_server_price_rub} ₽ / месяц\n\n"
+        "Для первых клиентов возможны индивидуальные условия.\n\n"
+        "Нажмите кнопку ниже, чтобы оставить заявку — поддержка свяжется с вами и уточнит детали.",
+        reply_markup=custom_servers_request_keyboard(
+            "custom_servers:request_family",
+            "📨 Оставить заявку",
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "custom_servers:business")
+async def custom_servers_business(callback: CallbackQuery, settings: Settings) -> None:
+    """Show business custom server request details."""
+    if not settings.custom_servers_enabled:
+        await callback.message.answer(custom_servers_disabled_text())
+        await callback.answer()
+        return
+
+    await callback.message.answer(
+        "🏢 Корпоративным клиентам\n\n"
+        "Решение для команд, небольших компаний, офисов и сотрудников на удалёнке.\n\n"
+        "Варианты:\n\n"
+        "🔹 До 20 подключений\n"
+        "Рекомендуемая конфигурация серверной ноды:\n"
+        "2 CPU / 2 GB RAM\n\n"
+        "Цена:\n"
+        f"от {settings.business_server_20_price_rub} ₽ / месяц\n\n"
+        "🔷 До 40 подключений\n"
+        "Рекомендуемая конфигурация серверной ноды:\n"
+        "2 CPU / 4 GB RAM\n\n"
+        "Цена:\n"
+        f"от {settings.business_server_40_price_rub} ₽ / месяц\n\n"
+        "Что входит:\n\n"
+        "✅ отдельная серверная нода под вашу команду;\n"
+        "✅ персональная настройка под нужное количество подключений;\n"
+        "✅ первичная настройка через удалённый доступ в подарок;\n"
+        "✅ помощь с подключением сотрудников;\n"
+        "✅ настройка Keenetic или DD-WRT по договорённости;\n"
+        "✅ при необходимости можно масштабировать количество подключений.\n\n"
+        "Нажмите кнопку ниже, чтобы оставить заявку — поддержка свяжется с вами и уточнит детали.",
+        reply_markup=custom_servers_request_keyboard(
+            "custom_servers:request_business",
+            "📨 Заявка для компании",
+        ),
+    )
+    await callback.answer()
+
+
+def custom_server_user_identity(callback: CallbackQuery) -> tuple[int, str, str]:
+    """Return escaped user details for custom server admin alerts."""
+    if callback.from_user is None:
+        raise ValueError("Callback user is not available")
+
+    telegram_id = callback.from_user.id
+    full_name = escape(callback.from_user.full_name or "—")
+    username = escape(callback.from_user.username or "—")
+    return telegram_id, full_name, username
+
+
+async def send_custom_server_request_to_admins(
+    callback: CallbackQuery,
+    settings: Settings,
+    alert_text: str,
+    user_text: str,
+) -> None:
+    """Notify administrators about a custom server request and confirm it to user."""
+    if callback.from_user is None:
+        await callback.message.answer("Не удалось определить пользователя.")
+        await callback.answer()
+        return
+
+    await notify_admins(callback.bot, settings, alert_text)
+    await callback.message.answer(user_text)
+    await callback.answer("Заявка принята")
+
+
+@router.callback_query(F.data == "custom_servers:request_family")
+async def custom_servers_request_family(
+    callback: CallbackQuery,
+    settings: Settings,
+) -> None:
+    """Accept a family custom server request and notify administrators."""
+    if not settings.custom_servers_enabled:
+        await callback.message.answer(custom_servers_disabled_text())
+        await callback.answer()
+        return
+
+    telegram_id, full_name, username = custom_server_user_identity(callback)
+    alert_text = (
+        "📨 Новая заявка: семейный индивидуальный доступ\n\n"
+        f"Пользователь: <a href=\"tg://user?id={telegram_id}\">{full_name}</a>\n"
+        f"Telegram ID: <code>{telegram_id}</code>\n"
+        f"Username: @{username}\n\n"
+        "Интерес: семейный доступ\n"
+        f"Рекомендуемая цена: от {settings.family_server_price_rub} ₽/мес\n"
+        "Лимит: до 10 одновременных подключений/IP\n\n"
+        "Что уточнить:\n"
+        "• сколько устройств планируется;\n"
+        "• нужен ли роутер;\n"
+        "• модель роутера: Keenetic / DD-WRT / другое;\n"
+        "• нужен ли удалённый доступ для настройки;\n"
+        "• удобный способ связи."
+    )
+    user_text = (
+        "Заявка принята ✅\n\n"
+        "Вы выбрали: семейный индивидуальный доступ.\n\n"
+        "Поддержка свяжется с вами, уточнит количество устройств, удобный способ настройки "
+        "и подготовит персональные условия."
+    )
+    await send_custom_server_request_to_admins(callback, settings, alert_text, user_text)
+
+
+@router.callback_query(F.data == "custom_servers:request_business")
+async def custom_servers_request_business(
+    callback: CallbackQuery,
+    settings: Settings,
+) -> None:
+    """Accept a business custom server request and notify administrators."""
+    if not settings.custom_servers_enabled:
+        await callback.message.answer(custom_servers_disabled_text())
+        await callback.answer()
+        return
+
+    telegram_id, full_name, username = custom_server_user_identity(callback)
+    alert_text = (
+        "📨 Новая заявка: корпоративный доступ\n\n"
+        f"Пользователь: <a href=\"tg://user?id={telegram_id}\">{full_name}</a>\n"
+        f"Telegram ID: <code>{telegram_id}</code>\n"
+        f"Username: @{username}\n\n"
+        "Интерес: корпоративный доступ\n\n"
+        "Варианты:\n"
+        f"• до 20 подключений — от {settings.business_server_20_price_rub} ₽/мес, "
+        "рекомендуемая нода 2 CPU / 2 GB RAM;\n"
+        f"• до 40 подключений — от {settings.business_server_40_price_rub} ₽/мес, "
+        "рекомендуемая нода 2 CPU / 4 GB RAM.\n\n"
+        "Что уточнить:\n"
+        "• сколько сотрудников/устройств;\n"
+        "• нужна ли настройка роутера;\n"
+        "• модель роутера: Keenetic / DD-WRT / другое;\n"
+        "• нужна ли удалённая настройка через AnyDesk;\n"
+        "• есть ли доступ к веб-интерфейсу роутера;\n"
+        "• удобный способ связи."
+    )
+    user_text = (
+        "Заявка принята ✅\n\n"
+        "Вы выбрали: корпоративный доступ.\n\n"
+        "Поддержка свяжется с вами, уточнит количество подключений, сценарий использования "
+        "и подготовит персональное предложение."
+    )
+    await send_custom_server_request_to_admins(callback, settings, alert_text, user_text)
+
+
+@router.callback_query(F.data == "custom_servers:support")
+async def custom_servers_support(callback: CallbackQuery, settings: Settings) -> None:
+    """Show support and remote setup requirements for custom servers."""
+    await callback.message.answer(
+        "💬 Поддержка и настройка\n\n"
+        "Для первичной настройки через удалённый доступ обычно понадобится:\n\n"
+        "🖥 AnyDesk или другой согласованный способ удалённого подключения;\n"
+        "🌐 доступ к веб-интерфейсу роутера в браузере, например 192.168.1.1;\n"
+        "🔐 логин и пароль администратора роутера;\n"
+        "📦 для Keenetic может понадобиться флешка, если используется установка через XKeen;\n"
+        "📌 модель роутера и версия прошивки.\n\n"
+        "Пароль не нужно отправлять в бот. Доступ вводится клиентом во время удалённой настройки.\n\n"
+        "Поддерживаемые варианты:\n"
+        "• Keenetic;\n"
+        "• DD-WRT;\n"
+        "• другие модели — по согласованию.\n\n"
+        "Напишите в поддержку, чтобы уточнить возможность настройки именно вашего оборудования.\n\n"
+        f"{support_contact_text(settings)}",
+        reply_markup=custom_servers_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "custom_servers:back")
+async def custom_servers_back(callback: CallbackQuery, settings: Settings) -> None:
+    """Return to the custom server section intro."""
+    if not settings.custom_servers_enabled:
+        await callback.message.answer(custom_servers_disabled_text())
+        await callback.answer()
+        return
+
+    await callback.message.answer(
+        custom_servers_intro_text(),
+        reply_markup=custom_servers_keyboard(),
+    )
     await callback.answer()
 
 
