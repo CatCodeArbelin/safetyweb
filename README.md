@@ -107,6 +107,14 @@ docker compose logs -f bot
 docker compose down
 ```
 
+## Запуск приложения
+
+Production entrypoint приложения — `python -m app.main`. Именно этот способ запуска инициализирует Telegram bot instance, фоновые задачи и, при необходимости, HTTP callback server для платёжных webhook-ов.
+
+HTTP callback server поднимается внутри `app.main` только при `PAYMENT_PROVIDER=platega` и `TEST_MODE=false`. В остальных режимах отдельный HTTP-сервер для callback-ов не запускается.
+
+Standalone-запуск `uvicorn app.http_app:app` не рекомендуется и не поддерживается: webhook app должна иметь доступ к экземпляру Telegram bot, который создаётся в `app.main`, чтобы обработчики могли корректно завершать оплату и отправлять уведомления.
+
 ## Alembic-миграции
 
 Миграции находятся в каталоге `alembic/versions`. В штатном Docker Compose-сценарии они применяются автоматически при запуске контейнера `bot`.
@@ -170,6 +178,9 @@ TEST_MODE не выдаёт скидку раннего покупателя.
 - `/admin` — открыть административное меню.
 - `/stats` — посмотреть общую статистику по пользователям, подпискам, оплатам, скидкам и реферальной программе.
 - `/add_days <telegram_id> <days> [reason]` — вручную добавить бонусные дни к активной подписке пользователя.
+- `/check_payment <provider_payment_id>` — проверить локальный и провайдерский статус платежа, при необходимости догнать финализацию.
+- `/payment <provider_payment_id>` — alias для `/check_payment`.
+- `/user <telegram_id>` — показать карточку пользователя, подписку, trial, скидки, рефералку и последние платежи.
 - `XUI debug` в административном меню — выполнить диагностическую проверку внешнего контура без создания пользователя.
 - Кнопка «Подтвердить оплату» в уведомлении администратору — подтвердить ручную оплату и выдать пользователю цифровой доступ.
 
@@ -266,12 +277,15 @@ TEST_MODE — это режим разработки. Он позволяет п
 - `PLATEGA_TEST_MODE` — флаг тестового режима на стороне Platega; он не заменяет общий `TEST_MODE`.
 - `PLATEGA_RECONCILE_INTERVAL_SECONDS` — интервал фоновой сверки pending-платежей со статусом Platega.
 - `PLATEGA_WEBHOOK_RETRY_INTERVAL_SECONDS` — интервал повторной обработки сохранённых webhook-событий Platega.
+- `PLATEGA_WEBHOOK_MAX_RETRIES` — максимальное количество повторных попыток обработки webhook-события до перевода в `dead`.
 
 Callback endpoint по адресу `PLATEGA_CALLBACK_PATH` должен быть доступен Platega извне по публичному HTTPS-URL. Локальный или закрытый HTTP endpoint не подходит для production-платежей, потому что webhook-и Platega не смогут подтвердить транзакции. Production HTTP callback server запускается только через `python -m app.main`; не запускайте standalone `uvicorn app.http_app:app`, потому что callback app должен получать Telegram bot instance для обработки webhook-ов и уведомлений.
 
 `TEST_MODE=true` полностью обходит Platega: бот не создаёт реальный платёж, не обращается к API Platega и сразу выдаёт цифровой доступ для разработки. `PLATEGA_TEST_MODE` относится только к настройкам провайдера Platega и не заменяет `TEST_MODE`; при `TEST_MODE=false` платежи всё равно проходят через выбранный `PAYMENT_PROVIDER`.
 
-Доступ выдаётся только после verified webhook/status check: входящий callback сохраняется и обрабатывается после проверки секрета и сверки транзакции со статусом Platega. Возврат пользователя на `pay_return` или `PLATEGA_RETURN_URL` сам по себе не выдаёт доступ и не считается подтверждением оплаты.
+Доступ выдаётся только после verified webhook/status check: входящий callback сохраняется в таблицу `payment_webhook_events` и обрабатывается после проверки секрета и сверки транзакции со статусом Platega. Возврат пользователя на `pay_return` или `PLATEGA_RETURN_URL` сам по себе не выдаёт доступ и не считается подтверждением оплаты.
+
+Scheduler повторно обрабатывает webhook events в состояниях `pending` и `failed`. После превышения retry limit событие переводится в состояние `dead` и требует ручной проверки администратором через диагностические admin-команды и данные платежа.
 
 Маппинг статусов Platega в локальные статусы платежей:
 
