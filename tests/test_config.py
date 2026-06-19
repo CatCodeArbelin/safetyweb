@@ -1,7 +1,7 @@
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from app.config import Settings, XuiNodeConfig
+from app.config import PlategaPaymentMethodConfig, Settings, XuiNodeConfig
 
 
 def _settings_kwargs() -> dict[str, object]:
@@ -157,3 +157,93 @@ def test_platega_webhook_retry_settings_and_legacy_alias() -> None:
     assert settings.platega_webhook_max_attempts == 7
     assert settings.platega_webhook_retry_base_seconds == 45
     assert settings.platega_webhook_retry_max_seconds == 600
+
+
+def test_platega_payment_methods_json_parses_configured_methods() -> None:
+    settings = Settings(
+        **_settings_kwargs(),
+        platega_payment_methods_json="""
+        {
+            "sbp": {
+                "title": "СБП",
+                "payment_method": "SBP_RUB"
+            },
+            "crypto": {
+                "title": "Crypto",
+                "payment_method": "USDT_TRC20"
+            }
+        }
+        """,
+    )
+
+    sbp = settings.get_platega_payment_method("sbp")
+    crypto = settings.get_platega_payment_method("crypto")
+
+    assert isinstance(sbp, PlategaPaymentMethodConfig)
+    assert sbp.title == "СБП"
+    assert sbp.payment_method == "SBP_RUB"
+    assert crypto.title == "Crypto"
+    assert crypto.payment_method == "USDT_TRC20"
+
+
+def test_platega_payment_methods_json_empty_preserves_single_method_flow() -> None:
+    settings = Settings(
+        **_settings_kwargs(),
+        platega_payment_method="CARD_RUB",
+        platega_payment_methods_json="",
+    )
+
+    assert settings.platega_payment_methods_json == {}
+    assert settings.platega_payment_method == "CARD_RUB"
+
+
+def test_empty_platega_payment_method_is_omitted_in_single_method_flow() -> None:
+    settings = Settings(
+        **_settings_kwargs(),
+        platega_payment_method=" ",
+        platega_payment_methods_json="",
+    )
+
+    assert settings.platega_payment_methods_json == {}
+    assert settings.platega_payment_method is None
+
+
+@pytest.mark.parametrize(
+    "platega_payment_methods_json",
+    [
+        "[]",
+        '{"": {"title": "СБП", "payment_method": "SBP_RUB"}}',
+        '{"sbp": "SBP_RUB"}',
+        '{"sbp": {"title": "СБП"}}',
+        '{"sbp": {"title": "СБП", "payment_method": ""}}',
+    ],
+)
+def test_platega_payment_methods_json_validation(
+    platega_payment_methods_json: str,
+) -> None:
+    with pytest.raises((TypeError, ValidationError)):
+        Settings(
+            **_settings_kwargs(),
+            platega_payment_methods_json=platega_payment_methods_json,
+        )
+
+
+def test_get_platega_payment_method_rejects_missing_method_code() -> None:
+    settings = Settings(
+        **_settings_kwargs(),
+        platega_payment_methods_json="""
+        {
+            "sbp": {
+                "title": "СБП",
+                "payment_method": "SBP_RUB"
+            }
+        }
+        """,
+    )
+
+    with pytest.raises(ValueError):
+        settings.get_platega_payment_method(" ")
+    with pytest.raises(KeyError) as error:
+        settings.get_platega_payment_method("crypto")
+
+    assert "crypto" in str(error.value)

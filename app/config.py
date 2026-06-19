@@ -240,6 +240,15 @@ class Settings(BaseSettings):
         """Normalize selected payment provider."""
         return value.lower() if isinstance(value, str) else value
 
+    @field_validator("platega_payment_method", mode="before")
+    @classmethod
+    def normalize_platega_payment_method(cls, value: str | None) -> str | None:
+        """Normalize the legacy single Platega payment method setting."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
     @model_validator(mode="after")
     def validate_settings(self) -> "Settings":
         """Validate cross-field settings and defaults."""
