@@ -4,23 +4,57 @@ import json
 from typing import Annotated, Literal
 from urllib.parse import quote_plus
 
-from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class XuiNodeConfig(BaseModel):
     """Configuration for a single X-UI node."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     key: str
+    name: str | None = None
     enabled: bool = True
     max_active_subscriptions: int | None = None
-    xui_base_url: str = "http://localhost:2053"
-    xui_public_host: str | None = None
-    xui_sub_base_url: str | None = None
-    xui_api_token: SecretStr | None = Field(default=None, repr=False)
-    xui_username: str
-    xui_password: SecretStr = Field(repr=False)
-    xui_inbound_ids: Annotated[list[int], NoDecode]
+    weight: int = 1
+    default_traffic_gb: int | None = None
+    default_limit_ip: int | None = None
+    xui_base_url: str = Field(
+        default="http://localhost:2053",
+        validation_alias=AliasChoices("base_url", "xui_base_url"),
+    )
+    xui_public_host: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("public_host", "xui_public_host"),
+    )
+    xui_sub_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("sub_base_url", "xui_sub_base_url"),
+    )
+    xui_api_token: SecretStr | None = Field(
+        default=None,
+        repr=False,
+        validation_alias=AliasChoices("api_token", "xui_api_token"),
+    )
+    xui_username: str = Field(
+        validation_alias=AliasChoices("username", "xui_username"),
+    )
+    xui_password: SecretStr = Field(
+        repr=False,
+        validation_alias=AliasChoices("password", "xui_password"),
+    )
+    xui_inbound_ids: Annotated[list[int], NoDecode] = Field(
+        validation_alias=AliasChoices("inbound_ids", "xui_inbound_ids"),
+    )
 
     @field_validator("key")
     @classmethod
@@ -32,6 +66,18 @@ class XuiNodeConfig(BaseModel):
             raise ValueError(msg)
         return normalized
 
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str | None) -> str | None:
+        """Validate node display name is not empty when configured."""
+        if value is None:
+            return value
+        normalized = value.strip()
+        if not normalized:
+            msg = "X-UI node name must not be empty"
+            raise ValueError(msg)
+        return normalized
+
     @field_validator("max_active_subscriptions")
     @classmethod
     def validate_max_active_subscriptions(cls, value: int | None) -> int | None:
@@ -40,6 +86,31 @@ class XuiNodeConfig(BaseModel):
             msg = "max_active_subscriptions must be positive"
             raise ValueError(msg)
         return value
+
+    @field_validator("default_traffic_gb", "default_limit_ip")
+    @classmethod
+    def validate_optional_non_negative_int(cls, value: int | None) -> int | None:
+        """Validate optional per-node provisioning defaults are not negative."""
+        if value is not None and value < 0:
+            msg = "node provisioning defaults must not be negative"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("weight")
+    @classmethod
+    def validate_weight(cls, value: int) -> int:
+        """Validate node selection weight is positive."""
+        if value <= 0:
+            msg = "weight must be positive"
+            raise ValueError(msg)
+        return value
+
+    @model_validator(mode="after")
+    def set_default_name(self) -> "XuiNodeConfig":
+        """Use the node key as the display name when no name is configured."""
+        if self.name is None:
+            self.name = self.key
+        return self
 
     @field_validator("xui_inbound_ids", mode="before")
     @classmethod
@@ -105,7 +176,9 @@ class Settings(BaseSettings):
     support_username: str = "@arbelin94"
     support_second_username: str | None = "@BamboleiloO87"
     support_email: str | None = "catcodework@gmail.com"
-    privacy_policy_url: str = "https://telegra.ph/Politika-konfidencialnosti-LadNet-06-16"
+    privacy_policy_url: str = (
+        "https://telegra.ph/Politika-konfidencialnosti-LadNet-06-16"
+    )
     terms_url: str = "https://telegra.ph/Polzovatelskoe-soglashenie-LadNet-06-16"
     tariffs_url: str = "https://telegra.ph/Tarify-i-usloviya-oplaty-LadNet-06-16"
     admin_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
@@ -151,10 +224,7 @@ class Settings(BaseSettings):
                 if getattr(self, field_name) in (None, "")
             ]
             if missing_fields:
-                msg = (
-                    "Platega payment provider requires: "
-                    + ", ".join(missing_fields)
-                )
+                msg = "Platega payment provider requires: " + ", ".join(missing_fields)
                 raise ValueError(msg)
 
         return self
@@ -265,6 +335,7 @@ class Settings(BaseSettings):
         return [
             XuiNodeConfig(
                 key="default",
+                name="Default",
                 xui_base_url=self.xui_base_url,
                 xui_public_host=self.xui_public_host,
                 xui_sub_base_url=self.xui_sub_base_url,
