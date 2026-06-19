@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from html import escape
+import re
 from typing import Any, Final
 
 from sqlalchemy import select
@@ -43,6 +44,22 @@ def _extract_provider_expires_at(
         expires_in = data.get("expires_in")
     if expires_in is None or expires_in == "":
         return None
+
+    if isinstance(expires_in, str):
+        duration_match = re.fullmatch(
+            r"(?P<hours>\d{2}):(?P<minutes>\d{2}):(?P<seconds>\d{2})",
+            expires_in.strip(),
+        )
+        if duration_match is not None:
+            duration = timedelta(
+                hours=int(duration_match.group("hours")),
+                minutes=int(duration_match.group("minutes")),
+                seconds=int(duration_match.group("seconds")),
+            )
+            base = created_at or datetime.now(tz=UTC)
+            if base.tzinfo is None:
+                base = base.replace(tzinfo=UTC)
+            return (base + duration).astimezone(UTC)
 
     try:
         numeric_expires_in = float(expires_in)
