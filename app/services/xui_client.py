@@ -2,13 +2,14 @@
 
 import json
 import logging
+import re
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel, ConfigDict
 
-from app.config import Settings
+from app.config import Settings, XuiNodeConfig
 
 
 logger = logging.getLogger(__name__)
@@ -48,8 +49,23 @@ class XuiAddClientRequest(BaseModel):
 class XuiClient:
     """Asynchronous X-UI API client with cookie-based authentication."""
 
-    def __init__(self, settings: Settings | None = None) -> None:
-        self.settings = settings or Settings()
+    def __init__(self, settings: Settings, node: XuiNodeConfig | None = None) -> None:
+        self.settings = settings
+        self._base_url = (
+            node.xui_base_url if node is not None else settings.xui_base_url
+        ).rstrip("/")
+        self._api_token_value = self._secret_value(
+            node.xui_api_token if node is not None else settings.xui_api_token
+        )
+        self._username = node.xui_username if node is not None else settings.xui_username
+        self._password = node.xui_password if node is not None else settings.xui_password
+        self._inbound_ids_value = (
+            node.xui_inbound_ids if node is not None else settings.xui_inbound_ids
+        )
+        if self._username is None or self._password is None:
+            msg = "X-UI credentials are not configured"
+            raise ValueError(msg)
+
         api_token = self._api_token
         headers = (
             {
@@ -60,10 +76,9 @@ class XuiClient:
             if api_token
             else None
         )
-        base_url = self.settings.xui_base_url.rstrip("/")
-        logger.debug("XUI base URL: %s", base_url)
+        logger.debug("X-UI client initialized")
         self._client = httpx.AsyncClient(
-            base_url=base_url,
+            base_url=self._base_url,
             follow_redirects=True,
             headers=headers,
         )
@@ -78,8 +93,8 @@ class XuiClient:
         response = await self._client.post(
             "login",
             data={
-                "username": self.settings.xui_username,
-                "password": self.settings.xui_password.get_secret_value(),
+                "username": self._username,
+                "password": self._password.get_secret_value(),
             },
         )
         self._raise_for_status(response)
@@ -268,9 +283,16 @@ class XuiClient:
     @property
     def _api_token(self) -> str:
         """Return the configured API token, if token-based auth is enabled."""
-        if self.settings.xui_api_token is None:
+        return self._api_token_value
+
+    @staticmethod
+    def _secret_value(secret: Any) -> str:
+        """Return the plain secret value when a secret is configured."""
+        if secret is None:
             return ""
-        return self.settings.xui_api_token.get_secret_value()
+        if hasattr(secret, "get_secret_value"):
+            return secret.get_secret_value()
+        return str(secret)
 
     @staticmethod
     def _single_client(client_data: dict[str, Any]) -> dict[str, Any]:
@@ -304,7 +326,7 @@ class XuiClient:
     def _inbound_ids(self, inbound_id: int | list[int] | None = None) -> list[int]:
         """Return inbound ids from an explicit value or environment settings."""
         if inbound_id is None:
-            inbound_ids = self.settings.xui_inbound_ids
+            inbound_ids = self._inbound_ids_value
         elif isinstance(inbound_id, list):
             inbound_ids = inbound_id
         else:
@@ -320,7 +342,7 @@ class XuiClient:
         if inbound_id is not None:
             return inbound_id
 
-        inbound_ids = self.settings.xui_inbound_ids
+        inbound_ids = self._inbound_ids_value
         if not inbound_ids:
             msg = "XUI_INBOUND_IDS must contain at least one inbound id"
             raise ValueError(msg)
@@ -369,7 +391,9 @@ class XuiClient:
             raise XuiApiError(msg)
 
         if data.get("success") is False:
-            api_message = data.get("msg") or data.get("message") or data
+            api_message = cls._redact_sensitive(
+                data.get("msg") or data.get("message") or data
+            )
             raise XuiApiError(
                 f"X-UI API error: {api_message} "
                 f"(status={response.status_code}, "
@@ -378,10 +402,56 @@ class XuiClient:
 
         return data
 
-    @staticmethod
-    def _response_text(response: httpx.Response) -> str:
-        """Return response text for diagnostics without raising httpx exceptions."""
+    @classmethod
+    def _response_text(cls, response: httpx.Response) -> str:
+        """Return redacted response text for diagnostics."""
         try:
-            return response.text
+            text = response.text
         except UnicodeDecodeError:
-            return repr(response.content)
+            text = repr(response.content)
+        return cls._redact_sensitive(text)
+
+    @staticmethod
+    def _redact_sensitive(value: Any) -> Any:
+        """Redact credentials, cookies, and tokens from diagnostic values."""
+        if isinstance(value, dict):
+            redacted: dict[Any, Any] = {}
+            for key, item in value.items():
+                key_text = str(key).lower()
+                if any(
+                    marker in key_text
+                    for marker in (
+                        "username",
+                        "password",
+                        "cookie",
+                        "token",
+                        "authorization",
+                        "secret",
+                        "api_key",
+                    )
+                ):
+                    redacted[key] = "***"
+                else:
+                    redacted[key] = XuiClient._redact_sensitive(item)
+            return redacted
+        if isinstance(value, list):
+            return [XuiClient._redact_sensitive(item) for item in value]
+        if not isinstance(value, str):
+            return value
+
+        redacted_text = re.sub(
+            r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+",
+            r"\1***",
+            value,
+        )
+        redacted_text = re.sub(
+            r'(?i)("?(?:username|password|cookie|token|authorization|secret|api[_-]?key)"?\s*[:=]\s*)"?[^",&;\s}]+"?',
+            r"\1***",
+            redacted_text,
+        )
+        redacted_text = re.sub(
+            r"(?i)(bearer\s+)[^\s,;]+",
+            r"\1***",
+            redacted_text,
+        )
+        return redacted_text
