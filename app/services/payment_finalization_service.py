@@ -47,7 +47,7 @@ class PaymentFinalizationService:
         source: str,
     ) -> PaymentFinalizationResult:
         """Provision access and rewards for a paid payment idempotently."""
-        provision_result: ProvisionResult | None
+        provision_result: ProvisionResult | None = None
         async with async_session_maker() as session:
             payment_repository = PaymentRepository(session)
             payment = await payment_repository.get_by_provider_payment_id_for_update(
@@ -62,6 +62,7 @@ class PaymentFinalizationService:
                 raise ValueError(msg)
 
             provider_data = dict(payment.provider_data or {})
+            user = payment.user
 
             if payment.subscription_id is not None:
                 if not provider_data.get("user_notified_at"):
@@ -69,7 +70,7 @@ class PaymentFinalizationService:
                     if subscription is None:
                         subscription = await SubscriptionRepository(
                             session
-                        ).get_by_last_payment_id(
+                        ).get_by_last_payment_id_for_update(
                             payment.user.telegram_id,
                             provider_payment_id,
                         )
@@ -111,24 +112,18 @@ class PaymentFinalizationService:
                 msg = f"Cannot determine tariff months for payment {provider_payment_id!r}"
                 raise ValueError(msg)
 
-            user = payment.user
             subscription_repository = SubscriptionRepository(session)
-            if provider_data.get("finalization_started_at"):
-                subscription = await subscription_repository.get_by_last_payment_id(
-                    user.telegram_id,
-                    provider_payment_id,
-                )
-                if subscription is None:
-                    msg = "Payment finalization is already in progress"
-                    raise RuntimeError(msg)
-
+            subscription = await subscription_repository.get_by_last_payment_id_for_update(
+                telegram_id=user.telegram_id,
+                provider_payment_id=provider_payment_id,
+            )
+            if subscription is not None:
                 payment.subscription_id = subscription.id
-                finished_data = {
+                payment.provider_data = {
                     **provider_data,
                     "finalization_finished_at": datetime.now(tz=UTC).isoformat(),
                     "finalization_result": "attached_existing",
                 }
-                payment.provider_data = finished_data
                 await session.flush()
                 await session.commit()
                 provision_result = VpnService.provision_result_from_subscription(subscription)
@@ -150,7 +145,7 @@ class PaymentFinalizationService:
             payment.provider_data = provider_data
             await session.commit()
 
-        user_id = payment.user.telegram_id
+        user_id = user.telegram_id
         try:
             provision_result = await self._provision(provider_payment_id, user_id, months)
         except Exception as error:
