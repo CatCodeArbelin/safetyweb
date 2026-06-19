@@ -1,10 +1,10 @@
 """Payment repository helpers."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -14,6 +14,17 @@ from app.db.models import (
     PaymentWebhookEvent,
     PaymentWebhookHandlingState,
 )
+
+
+WEBHOOK_RETRY_DELAYS_SECONDS = (60, 300, 900, 3600, 10800)
+
+
+def webhook_retry_delay_seconds(retry_count: int) -> int:
+    """Return retry backoff delay for a webhook attempt count."""
+    if retry_count <= 0:
+        return WEBHOOK_RETRY_DELAYS_SECONDS[0]
+    index = min(retry_count - 1, len(WEBHOOK_RETRY_DELAYS_SECONDS) - 1)
+    return WEBHOOK_RETRY_DELAYS_SECONDS[index]
 
 
 class PaymentRepository:
@@ -221,6 +232,33 @@ class PaymentRepository:
         await self.session.flush()
         return event
 
+    async def get_retryable_webhook_events(
+        self, provider: str, now: datetime, limit: int = 100
+    ) -> list[PaymentWebhookEvent]:
+        """Load webhook events due for initial processing or retry."""
+        statement = (
+            select(PaymentWebhookEvent)
+            .where(
+                PaymentWebhookEvent.provider == provider,
+                PaymentWebhookEvent.handling_state.in_(
+                    [
+                        PaymentWebhookHandlingState.PENDING,
+                        PaymentWebhookHandlingState.FAILED,
+                    ]
+                ),
+                or_(
+                    PaymentWebhookEvent.next_retry_at.is_(None),
+                    PaymentWebhookEvent.next_retry_at <= now,
+                ),
+            )
+            .order_by(
+                PaymentWebhookEvent.next_retry_at.asc().nullsfirst(),
+                PaymentWebhookEvent.created_at,
+            )
+            .limit(limit)
+        )
+        return list(await self.session.scalars(statement))
+
     async def get_unprocessed_webhook_events(
         self, provider: str | None = None, limit: int = 100
     ) -> list[PaymentWebhookEvent]:
@@ -268,19 +306,50 @@ class PaymentRepository:
             return None
         event.handling_state = PaymentWebhookHandlingState.PROCESSED
         event.processing_error = None
+        event.next_retry_at = None
         event.processed_at = processed_at
+        await self.session.flush()
+        return event
+
+    async def mark_webhook_attempt(
+        self, event_id: int, now: datetime
+    ) -> PaymentWebhookEvent | None:
+        """Record that webhook processing was attempted."""
+        event = await self.session.get(PaymentWebhookEvent, event_id)
+        if event is None:
+            return None
+        event.retry_count += 1
+        event.last_attempt_at = now
+        event.next_retry_at = None
         await self.session.flush()
         return event
 
     async def mark_webhook_failed(
         self, webhook_event_id: int, processing_error: str
     ) -> PaymentWebhookEvent | None:
-        """Mark a webhook event as failed."""
+        """Mark a webhook event as failed and schedule the next retry."""
         event = await self.session.get(PaymentWebhookEvent, webhook_event_id)
         if event is None:
             return None
         event.handling_state = PaymentWebhookHandlingState.FAILED
         event.processing_error = processing_error
+        if event.last_attempt_at is not None:
+            event.next_retry_at = event.last_attempt_at + timedelta(
+                seconds=webhook_retry_delay_seconds(event.retry_count)
+            )
+        await self.session.flush()
+        return event
+
+    async def mark_webhook_dead(
+        self, event_id: int, error: str
+    ) -> PaymentWebhookEvent | None:
+        """Stop retrying a webhook event after it exceeds retry attempts."""
+        event = await self.session.get(PaymentWebhookEvent, event_id)
+        if event is None:
+            return None
+        event.handling_state = PaymentWebhookHandlingState.DEAD
+        event.processing_error = error
+        event.next_retry_at = None
         await self.session.flush()
         return event
 
