@@ -47,7 +47,7 @@ class XuiAddClientRequest(BaseModel):
 
 
 class XuiClient:
-    """Asynchronous X-UI API client with cookie-based authentication."""
+    """Asynchronous X-UI API client with configurable authentication."""
 
     def __init__(self, settings: Settings, node: XuiNodeConfig | None = None) -> None:
         self.settings = settings
@@ -56,6 +56,9 @@ class XuiClient:
         ).rstrip("/")
         self._api_token_value = self._secret_value(
             node.xui_api_token if node is not None else settings.xui_api_token
+        )
+        self._auth_mode = (
+            node.xui_auth_mode if node is not None else settings.xui_auth_mode
         )
         self._username = node.xui_username if node is not None else settings.xui_username
         self._password = node.xui_password if node is not None else settings.xui_password
@@ -67,15 +70,12 @@ class XuiClient:
             raise ValueError(msg)
 
         api_token = self._api_token
-        headers = (
-            {
-                "Authorization": f"Bearer {api_token}",
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            }
-            if api_token
-            else None
-        )
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        if api_token:
+            headers["Authorization"] = f"Bearer {api_token}"
         logger.debug("X-UI client initialized")
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
@@ -282,8 +282,10 @@ class XuiClient:
 
     @property
     def _api_token(self) -> str:
-        """Return the configured API token, if token-based auth is enabled."""
-        return self._api_token_value
+        """Return the configured API token when token-based auth is requested."""
+        if self._auth_mode != "api_token":
+            return ""
+        return self._api_token_value.strip()
 
     @staticmethod
     def _secret_value(secret: Any) -> str:
