@@ -1,9 +1,11 @@
 """Payment provider abstractions and payment service helpers."""
 
 from abc import ABC, abstractmethod
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from html import escape
 from typing import Any, Final
 
 from sqlalchemy import select
@@ -229,9 +231,11 @@ class PlategaPaymentProvider(PaymentProvider):
         self,
         settings: Settings | None = None,
         client: PlategaClient | None = None,
+        bot: Any | None = None,
     ) -> None:
         self.settings = settings or Settings()
         self.client = client
+        self.bot = bot
 
     async def create_payment(
         self,
@@ -273,6 +277,7 @@ class PlategaPaymentProvider(PaymentProvider):
 
             client = self.client or PlategaClient(settings=self.settings)
             should_close_client = self.client is None
+            sanitized_create_request = self._sanitize_provider_data(create_request)
             try:
                 provider_response = await client.create_transaction(
                     amount=payment.amount,
@@ -283,6 +288,29 @@ class PlategaPaymentProvider(PaymentProvider):
                     user_name=str(user_id),
                     payment_method=self.settings.platega_payment_method,
                 )
+            except Exception as error:
+                sanitized_error = self._sanitize_error(error)
+                provider_data = self._merge_provider_data(
+                    payment.provider_data,
+                    {
+                        "create_request": sanitized_create_request,
+                        "create_error": sanitized_error,
+                    },
+                )
+                await self._fail_created_payment(
+                    session,
+                    payment,
+                    provider_data,
+                    "platega_create_failed",
+                )
+                await self._notify_admins(
+                    "Ошибка создания платежа Platega\n"
+                    f"Payment ID: <code>{payment.id}</code>\n"
+                    f"Telegram ID: <code>{user_id}</code>\n"
+                    f"Ошибка: <code>{escape(sanitized_error)}</code>"
+                )
+                msg = "Platega payment creation failed"
+                raise RuntimeError(msg) from error
             finally:
                 if should_close_client:
                     await client.close()
@@ -290,7 +318,6 @@ class PlategaPaymentProvider(PaymentProvider):
             sanitized_provider_response = self._sanitize_provider_data(
                 provider_response
             )
-            sanitized_create_request = self._sanitize_provider_data(create_request)
             provider_data = {
                 "create_response": sanitized_provider_response,
                 "create_request": sanitized_create_request,
@@ -358,6 +385,29 @@ class PlategaPaymentProvider(PaymentProvider):
                 payment_url=payment.provider_redirect_url,
                 provider=PLATEGA_PROVIDER_NAME,
             )
+
+    @staticmethod
+    def _merge_provider_data(
+        existing_provider_data: Any,
+        new_provider_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        if isinstance(existing_provider_data, dict):
+            return {**existing_provider_data, **new_provider_data}
+        return new_provider_data
+
+    def _sanitize_error(self, error: Exception) -> str:
+        return str(
+            self._sanitize_provider_data({"error": " ".join(str(error).split())})[
+                "error"
+            ]
+        )[:2000]
+
+    async def _notify_admins(self, text: str) -> None:
+        if self.bot is None:
+            return
+        for admin_id in self.settings.admin_ids:
+            with suppress(Exception):
+                await self.bot.send_message(admin_id, text)
 
     @staticmethod
     async def _fail_created_payment(
