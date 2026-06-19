@@ -1,6 +1,7 @@
 """Background task scheduler."""
 
 from datetime import UTC, datetime, timedelta
+from html import escape
 from typing import Final
 
 from aiogram import Bot
@@ -26,6 +27,7 @@ from app.services.platega_client import PlategaClient
 from app.services.node_selector_service import NodeSelectorService
 from app.services.platega_webhook_service import PlategaWebhookService
 from app.services.xui_client import XuiClient
+from app.utils.sanitize import sanitize_exception
 
 EXPIRATION_JOB_ID: Final = "expire_subscriptions"
 EXPIRATION_REMINDER_JOB_ID: Final = "subscription_expiration_reminders"
@@ -38,7 +40,9 @@ REMINDER_WINDOWS: Final[tuple[tuple[int, SubscriptionNotificationType], ...]] = 
 )
 
 
-def create_scheduler(bot: Bot | None = None, settings: Settings | None = None) -> AsyncIOScheduler:
+def create_scheduler(
+    bot: Bot | None = None, settings: Settings | None = None
+) -> AsyncIOScheduler:
     """Create an application scheduler instance and register periodic jobs."""
     scheduler = AsyncIOScheduler(timezone=UTC)
     if bot is None:
@@ -156,7 +160,9 @@ async def _mark_webhook_dead_if_exhausted(
     )
 
 
-async def reconcile_platega_payments(bot: Bot, settings: Settings | None = None) -> None:
+async def reconcile_platega_payments(
+    bot: Bot, settings: Settings | None = None
+) -> None:
     """Reconcile pending Platega payments against provider transaction status."""
     app_settings = settings or Settings()
     if app_settings.payment_provider != "platega" or app_settings.test_mode:
@@ -165,7 +171,9 @@ async def reconcile_platega_payments(bot: Bot, settings: Settings | None = None)
     now = datetime.now(tz=UTC)
     async with async_session_maker() as session:
         repository = PaymentRepository(session)
-        pending_payments = await repository.get_pending_by_provider(PLATEGA_PROVIDER_NAME)
+        pending_payments = await repository.get_pending_by_provider(
+            PLATEGA_PROVIDER_NAME
+        )
 
     payments_with_provider_id = [
         payment for payment in pending_payments if payment.provider_payment_id
@@ -223,10 +231,36 @@ async def expire_subscriptions(bot: Bot, settings: Settings | None = None) -> No
     async with async_session_maker() as session:
         subscriptions = await _expired_active_subscriptions(session, now)
         for subscription in subscriptions:
-            await _deprovision_subscription_client(
+            try:
+                await _deprovision_subscription_client(
+                    subscription,
+                    node_selector,
+                    app_settings,
+                )
+            except Exception as error:
+                sanitized_error = sanitize_exception(error, limit=500)
+                _mark_deprovision_failure(
+                    subscription,
+                    now=now,
+                    policy=app_settings.xui_expired_client_policy,
+                    sanitized_error=sanitized_error,
+                )
+                await session.commit()
+                await _safe_notify_admins(
+                    bot,
+                    app_settings,
+                    _deprovision_error_alert(
+                        subscription,
+                        policy=app_settings.xui_expired_client_policy,
+                        sanitized_error=sanitized_error,
+                    ),
+                )
+                continue
+
+            _mark_deprovision_success(
                 subscription,
-                node_selector,
-                app_settings,
+                now=now,
+                policy=app_settings.xui_expired_client_policy,
             )
             subscription.status = SubscriptionStatus.EXPIRED
             subscription.disabled_at = now
@@ -270,6 +304,59 @@ async def send_expiration_reminders(bot: Bot) -> None:
                     subscription.user.telegram_id,
                     _reminder_text(days_before, subscription.expires_at),
                 )
+
+
+def _mark_deprovision_success(
+    subscription: Subscription,
+    *,
+    now: datetime,
+    policy: str,
+) -> None:
+    vpn_config = dict(subscription.vpn_config or {})
+    vpn_config["deprovisioned_at"] = now.isoformat()
+    vpn_config["deprovision_policy"] = policy
+    vpn_config["node_slot_released"] = True
+    subscription.vpn_config = vpn_config
+
+
+def _mark_deprovision_failure(
+    subscription: Subscription,
+    *,
+    now: datetime,
+    policy: str,
+    sanitized_error: str,
+) -> None:
+    vpn_config = dict(subscription.vpn_config or {})
+    vpn_config["deprovision_failed_at"] = now.isoformat()
+    vpn_config["deprovision_policy"] = policy
+    vpn_config["deprovision_error"] = sanitized_error
+    vpn_config["node_slot_released"] = False
+    subscription.vpn_config = vpn_config
+
+
+def _deprovision_error_alert(
+    subscription: Subscription,
+    *,
+    policy: str,
+    sanitized_error: str,
+) -> str:
+    node_key = subscription.node_key or "—"
+    telegram_id = getattr(subscription.user, "telegram_id", "—")
+    return "\n".join(
+        [
+            "🚨 Ошибка deprovision expired subscription",
+            f"Subscription ID: <code>{subscription.id}</code>",
+            f"Telegram ID: <code>{telegram_id}</code>",
+            f"Node key: <code>{escape(node_key)}</code>",
+            f"Policy: <code>{escape(policy)}</code>",
+            f"Error: <code>{escape(sanitized_error)}</code>",
+        ]
+    )
+
+
+async def _safe_notify_admins(bot: Bot, settings: Settings, text: str) -> None:
+    for admin_id in settings.admin_ids:
+        await _safe_send_message(bot, admin_id, text)
 
 
 async def _expired_active_subscriptions(
@@ -325,7 +412,9 @@ async def _deprovision_client(
     settings: Settings,
 ) -> None:
     if settings.xui_expired_client_policy == "delete":
-        await xui_client.delete_client(subscription.inbound_id, subscription.xui_client_id)
+        await xui_client.delete_client(
+            subscription.inbound_id, subscription.xui_client_id
+        )
         return
 
     client_payload = dict((subscription.vpn_config or {}).get("client") or {})
@@ -387,7 +476,4 @@ def _reminder_text(days_before: int, expires_at: datetime) -> str:
 
 def _expiration_text(expires_at: datetime) -> str:
     expires_text = expires_at.strftime("%d.%m.%Y %H:%M UTC")
-    return (
-        "Срок действия вашей индивидуальной подписки ЛадНет "
-        f"истёк ({expires_text})."
-    )
+    return f"Срок действия вашей индивидуальной подписки ЛадНет истёк ({expires_text})."
