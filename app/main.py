@@ -24,7 +24,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from app.config import Settings
+from app.config import Settings, XuiNodeConfig
 from app.http_app import create_app
 from app.db.repositories import (
     CustomerBenefitRepository,
@@ -44,6 +44,7 @@ from app.services.payment_service import (
 from app.services.platega_client import PlategaClient
 from app.services.platega_webhook_service import PlategaWebhookService
 from app.services.referral_service import ReferralService
+from app.services.node_selector_service import NodeSelectorService
 from app.services.stats_service import AdminStats, StatsService
 from app.services.subscription_service import SubscriptionService
 from app.services.vpn_service import (
@@ -346,6 +347,48 @@ def format_admin_stats(stats: AdminStats, early_buyer_limit: int) -> str:
     )
 
 
+def format_node_limit(limit: int | None) -> str:
+    """Format an optional node capacity limit for admin diagnostics."""
+    return "—" if limit is None else escape(str(limit))
+
+
+def format_node_public_host(public_host: str | None) -> str:
+    """Format an optional public node host for admin diagnostics."""
+    return escape(public_host or "—")
+
+
+def format_node_label(node: XuiNodeConfig) -> str:
+    """Format a node label without exposing secret node settings."""
+    return escape(getattr(node, "label", None) or node.key)
+
+
+def format_node_inbound_ids(inbound_ids: list[int]) -> str:
+    """Format configured inbound IDs for admin diagnostics."""
+    return ", ".join(escape(str(inbound_id)) for inbound_id in inbound_ids) or "—"
+
+
+async def get_node_health_status(settings: Settings, node: XuiNodeConfig) -> str:
+    """Return a best-effort, non-secret health status for an X-UI node."""
+    if not node.enabled:
+        return "disabled"
+
+    client = XuiClient(settings=settings, node=node)
+    try:
+        await client.list_inbounds()
+    except Exception as error:
+        return f"unhealthy: {type(error).__name__}"
+    finally:
+        await client.close()
+
+    return "healthy"
+
+
+async def get_active_subscription_counts_by_node() -> dict[str, int]:
+    """Return active subscription counts grouped by node key."""
+    async with async_session_maker() as session:
+        return await NodeSelectorService._get_active_subscription_counts(session)
+
+
 def format_admin_payment_details(
     *,
     provider: str,
@@ -602,6 +645,71 @@ async def stats_command(message: Message, settings: Settings) -> None:
 
     stats = await StatsService().get_admin_stats()
     await message.answer(format_admin_stats(stats, settings.early_buyer_limit))
+
+
+@router.message(Command("nodes"))
+async def nodes_command(message: Message, settings: Settings) -> None:
+    """Show safe configured node summary to administrators only."""
+    if message.from_user is None or message.from_user.id not in settings.admin_ids:
+        await message.answer("Недостаточно прав.")
+        return
+
+    active_counts = await get_active_subscription_counts_by_node()
+    lines = ["🖥 Ноды"]
+    for node in settings.xui_nodes:
+        lines.extend(
+            [
+                "",
+                f"key: <code>{escape(node.key)}</code>",
+                f"label: <code>{format_node_label(node)}</code>",
+                f"enabled: <code>{format_yes_no(node.enabled)}</code>",
+                f"active subscriptions: <code>{active_counts.get(node.key, 0)}</code>",
+                f"limit: <code>{format_node_limit(node.max_active_subscriptions)}</code>",
+                f"public host: <code>{format_node_public_host(node.xui_public_host)}</code>",
+            ]
+        )
+
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("node"))
+async def node_command(
+    message: Message,
+    command: CommandObject,
+    settings: Settings,
+) -> None:
+    """Show safe details for one configured node to administrators only."""
+    if message.from_user is None or message.from_user.id not in settings.admin_ids:
+        await message.answer("Недостаточно прав.")
+        return
+
+    node_key = (command.args or "").strip()
+    if not node_key:
+        await message.answer("Использование: <code>/node &lt;node_key&gt;</code>")
+        return
+
+    try:
+        node = settings.get_xui_node(node_key)
+    except (KeyError, ValueError):
+        await message.answer(
+            f"Нода с ключом <code>{escape(node_key)}</code> не найдена."
+        )
+        return
+
+    active_counts = await get_active_subscription_counts_by_node()
+    health_status = await get_node_health_status(settings, node)
+    lines = [
+        "🖥 Нода",
+        f"key: <code>{escape(node.key)}</code>",
+        f"label: <code>{format_node_label(node)}</code>",
+        f"enabled: <code>{format_yes_no(node.enabled)}</code>",
+        f"public host: <code>{format_node_public_host(node.xui_public_host)}</code>",
+        f"inbound IDs: <code>{format_node_inbound_ids(node.xui_inbound_ids)}</code>",
+        f"active count: <code>{active_counts.get(node.key, 0)}</code>",
+        f"max active subscriptions: <code>{format_node_limit(node.max_active_subscriptions)}</code>",
+        f"health: <code>{escape(health_status)}</code>",
+    ]
+    await message.answer("\n".join(lines))
 
 
 @router.message(Command("check_payment", "payment"))
