@@ -22,14 +22,14 @@ def upgrade() -> None:
         "subscriptions",
         sa.Column(
             "node_key",
-            sa.String(length=64),
+            sa.String(length=255),
             server_default="default",
             nullable=False,
         ),
     )
     op.add_column(
         "subscriptions",
-        sa.Column("node_label", sa.String(length=128), nullable=True),
+        sa.Column("node_label", sa.String(length=255), nullable=True),
     )
     op.create_index("ix_subscriptions_node_key", "subscriptions", ["node_key"])
 
