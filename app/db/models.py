@@ -354,6 +354,12 @@ class Payment(Base):
             "provider_expires_at",
         ),
         Index(
+            "ix_payments_node_reservation_capacity",
+            "reserved_node_key",
+            "status",
+            "node_reservation_expires_at",
+        ),
+        Index(
             "uq_payments_provider_payment_id",
             "provider",
             "provider_payment_id",
