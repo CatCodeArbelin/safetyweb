@@ -84,6 +84,11 @@ async def process_pending_payment_webhooks(
 ) -> None:
     """Retry pending or failed Platega webhook events."""
     app_settings = settings or Settings()
+    if app_settings.payment_provider != "platega":
+        return
+    if app_settings.test_mode:
+        return
+
     async with async_session_maker() as session:
         repository = PaymentRepository(session)
         events = await repository.get_unprocessed_webhook_events(provider=PLATEGA_PROVIDER_NAME)
