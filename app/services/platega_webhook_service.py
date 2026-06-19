@@ -20,34 +20,15 @@ if TYPE_CHECKING:
 
 
 def map_platega_status(status: str | None) -> PaymentStatus:
-    """Map Platega transaction status to the local payment status enum."""
+    """Map official Platega transaction statuses to local payment statuses."""
     normalized = (status or "").strip().upper()
-    if normalized == "PENDING":
-        return PaymentStatus.PENDING
-    if normalized == "CONFIRMED":
-        return PaymentStatus.PAID
-    if normalized == "CANCELED":
-        return PaymentStatus.FAILED
-    if normalized == "CHARGEBACKED":
-        return PaymentStatus.REFUNDED
-
-    aliases = {
-        "PAID": PaymentStatus.PAID,
-        "SUCCESS": PaymentStatus.PAID,
-        "SUCCEEDED": PaymentStatus.PAID,
-        "COMPLETED": PaymentStatus.PAID,
-        "COMPLETE": PaymentStatus.PAID,
-        "FAILED": PaymentStatus.FAILED,
-        "FAIL": PaymentStatus.FAILED,
-        "CANCELLED": PaymentStatus.FAILED,
-        "DECLINED": PaymentStatus.FAILED,
-        "ERROR": PaymentStatus.FAILED,
-        "TIMEOUT": PaymentStatus.FAILED,
-        "TIMED_OUT": PaymentStatus.FAILED,
-        "CHARGEBACK": PaymentStatus.REFUNDED,
-        "REFUNDED": PaymentStatus.REFUNDED,
+    status_map = {
+        "PENDING": PaymentStatus.PENDING,
+        "CONFIRMED": PaymentStatus.PAID,
+        "CANCELED": PaymentStatus.FAILED,
+        "CHARGEBACKED": PaymentStatus.REFUNDED,
     }
-    return aliases.get(normalized, PaymentStatus.PENDING)
+    return status_map.get(normalized, PaymentStatus.PENDING)
 
 
 class PlategaWebhookService:
