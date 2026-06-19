@@ -1,5 +1,7 @@
+import asyncio
 import os
 import sys
+from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -62,3 +64,50 @@ def test_extract_recovery_payload_handles_data_payload() -> None:
 
     assert payload["paymentId"] == 42
     assert payload["months"] == 6
+
+
+def test_candidate_values_traverses_payment_details() -> None:
+    values = PlategaWebhookService._candidate_values(
+        {"paymentDetails": {"amount": "10.50", "currency": "RUB"}},
+        "amount",
+        "currency",
+    )
+
+    assert values == ["10.50", "RUB"]
+
+
+def test_transaction_payment_details_take_precedence_over_fallbacks() -> None:
+    transaction = {
+        "amount": "99.99",
+        "currency": "USD",
+        "paymentDetails": {"amount": "10.50", "currency": "RUB"},
+    }
+
+    assert PlategaWebhookService._extract_transaction_amount(transaction) == Decimal(
+        "10.50"
+    )
+    assert PlategaWebhookService._extract_transaction_currency(transaction) == "RUB"
+
+
+def test_create_recovery_payment_returns_none_without_amount_or_currency() -> None:
+    async def run() -> None:
+        service = PlategaWebhookService()
+        repository = type("Repository", (), {"session": object()})()
+
+        missing_amount = await service._create_recovery_payment(
+            repository,
+            "provider-id",
+            {"telegramId": "123", "months": "1"},
+            {"paymentDetails": {"currency": "RUB"}},
+        )
+        missing_currency = await service._create_recovery_payment(
+            repository,
+            "provider-id",
+            {"telegramId": "123", "months": "1"},
+            {"paymentDetails": {"amount": "10.50"}},
+        )
+
+        assert missing_amount is None
+        assert missing_currency is None
+
+    asyncio.run(run())
