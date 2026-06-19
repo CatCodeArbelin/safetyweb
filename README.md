@@ -200,6 +200,18 @@ Standalone-запуск `uvicorn app.http_app:app` не рекомендуетс
 
 Миграции находятся в каталоге `alembic/versions`. В штатном Docker Compose-сценарии они применяются автоматически при запуске контейнера `bot`.
 
+Перед PR с миграциями проверьте граф Alembic:
+
+```bash
+alembic heads
+alembic branches
+alembic history --verbose
+alembic upgrade head
+pytest tests/test_alembic_graph.py
+```
+
+В проекте должен быть ровно один Alembic head. Нельзя создавать миграции с повторяющимся `revision`. Нельзя чинить multiple heads через `alembic upgrade heads` в Docker entrypoint: штатная команда `alembic upgrade head` должна работать без указания отдельной ветки.
+
 Если нужно применить миграции вручную отдельной командой, выполните:
 
 ```bash
