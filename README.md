@@ -87,7 +87,7 @@ Compose поднимает сервисы:
 - `postgres` — база данных PostgreSQL;
 - `redis` — хранилище FSM-состояний.
 
-Сервис `bot` ожидает успешные health checks PostgreSQL и Redis. При старте контейнера автоматически выполняется `alembic upgrade head`, затем запускается бот командой `python -m app.main`.
+Сервис `bot` ожидает успешные health checks PostgreSQL и Redis. При старте контейнера автоматически выполняется `alembic upgrade head`, затем запускается production entrypoint `python -m app.main`. Standalone-запуск `uvicorn app.http_app:app` не используется: callback-приложение создаётся в `app.main` через factory `create_app(settings=settings, bot=bot)`, чтобы обработчики callback-ов имели доступ к экземпляру Telegram bot.
 
 Для фонового запуска используйте:
 
@@ -267,7 +267,7 @@ TEST_MODE — это режим разработки. Он позволяет п
 - `PLATEGA_RECONCILE_INTERVAL_SECONDS` — интервал фоновой сверки pending-платежей со статусом Platega.
 - `PLATEGA_WEBHOOK_RETRY_INTERVAL_SECONDS` — интервал повторной обработки сохранённых webhook-событий Platega.
 
-Callback endpoint по адресу `PLATEGA_CALLBACK_PATH` должен быть доступен Platega извне по публичному HTTPS-URL. Локальный или закрытый HTTP endpoint не подходит для production-платежей, потому что webhook-и Platega не смогут подтвердить транзакции.
+Callback endpoint по адресу `PLATEGA_CALLBACK_PATH` должен быть доступен Platega извне по публичному HTTPS-URL. Локальный или закрытый HTTP endpoint не подходит для production-платежей, потому что webhook-и Platega не смогут подтвердить транзакции. Production HTTP callback server запускается только через `python -m app.main`; не запускайте standalone `uvicorn app.http_app:app`, потому что callback app должен получать Telegram bot instance для обработки webhook-ов и уведомлений.
 
 `TEST_MODE=true` полностью обходит Platega: бот не создаёт реальный платёж, не обращается к API Platega и сразу выдаёт цифровой доступ для разработки. `PLATEGA_TEST_MODE` относится только к настройкам провайдера Platega и не заменяет `TEST_MODE`; при `TEST_MODE=false` платежи всё равно проходят через выбранный `PAYMENT_PROVIDER`.
 
