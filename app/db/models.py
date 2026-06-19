@@ -387,6 +387,10 @@ class Payment(Base):
     provider_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     provider_payment_method: Mapped[str | None] = mapped_column(String(255))
     provider_data: Mapped[dict | None] = mapped_column(JSONB)
+    reserved_node_key: Mapped[str | None] = mapped_column(String(255))
+    node_reservation_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     status_reason: Mapped[str | None] = mapped_column(Text)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
