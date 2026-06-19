@@ -15,7 +15,6 @@ from app.db.models import (
     PaymentWebhookHandlingState,
 )
 
-
 WEBHOOK_RETRY_DELAYS_SECONDS = (60, 300, 900, 3600, 10800)
 
 
@@ -202,6 +201,19 @@ class PaymentRepository:
                     Payment.provider_expires_at <= now,
                 )
                 .order_by(Payment.provider_expires_at)
+            )
+        )
+
+    async def get_latest_by_user_id(
+        self, user_id: int, limit: int = 5
+    ) -> list[Payment]:
+        """Return latest payments for a user without provider payload data."""
+        return list(
+            await self.session.scalars(
+                select(Payment)
+                .where(Payment.user_id == user_id)
+                .order_by(Payment.created_at.desc(), Payment.id.desc())
+                .limit(limit)
             )
         )
 

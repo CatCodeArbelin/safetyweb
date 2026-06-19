@@ -26,7 +26,12 @@ from aiogram.types import (
 
 from app.config import Settings
 from app.http_app import create_app
-from app.db.repositories import SubscriptionRepository, UserRepository
+from app.db.repositories import (
+    CustomerBenefitRepository,
+    ReferralRewardRepository,
+    SubscriptionRepository,
+    UserRepository,
+)
 from app.db.repositories.payments import PaymentRepository
 from app.db.session import async_session_maker
 from app.services.benefit_service import BenefitService
@@ -138,7 +143,11 @@ def trial_access_keyboard() -> InlineKeyboardMarkup:
     """Build inline keyboard for one-time trial access."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🧪 Получить тестовый доступ", callback_data="trial_access")]
+            [
+                InlineKeyboardButton(
+                    text="🧪 Получить тестовый доступ", callback_data="trial_access"
+                )
+            ]
         ]
     )
 
@@ -162,9 +171,17 @@ def profile_keyboard(
         )
     keyboard.extend(
         [
-            [InlineKeyboardButton(text=BTN_MY_SUBSCRIPTION, callback_data="profile:subscription")],
+            [
+                InlineKeyboardButton(
+                    text=BTN_MY_SUBSCRIPTION, callback_data="profile:subscription"
+                )
+            ],
             [InlineKeyboardButton(text=BTN_MY_LINK, callback_data="profile:link")],
-            [InlineKeyboardButton(text=BTN_DOCUMENTS, callback_data="profile:documents")],
+            [
+                InlineKeyboardButton(
+                    text=BTN_DOCUMENTS, callback_data="profile:documents"
+                )
+            ],
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -227,8 +244,22 @@ async def is_trial_available(telegram_id: int, settings: Settings) -> bool:
         if user is None or user.trial_used_at is not None:
             return False
 
-    active_subscription = await SubscriptionService().get_active_subscription(telegram_id)
+    active_subscription = await SubscriptionService().get_active_subscription(
+        telegram_id
+    )
     return active_subscription is None
+
+
+def format_optional_datetime(value: datetime | None) -> str:
+    """Format an optional datetime for admin diagnostics."""
+    if value is None:
+        return "—"
+    return escape(value.strftime("%Y-%m-%d %H:%M:%S %Z"))
+
+
+def format_yes_no(value: bool) -> str:
+    """Format a boolean as a neutral yes/no value."""
+    return "yes" if value else "no"
 
 
 def format_access_error_alert(
@@ -394,9 +425,13 @@ async def recover_orphan_platega_payment(
         return payment is not None
 
 
-def payment_request_keyboard(months: int, test_mode: bool = False) -> InlineKeyboardMarkup:
+def payment_request_keyboard(
+    months: int, test_mode: bool = False
+) -> InlineKeyboardMarkup:
     """Build inline keyboard for submitting a payment or test access request."""
-    button_text = "🧪 Получить тестовый доступ" if test_mode else "💳 Создать заявку на оплату"
+    button_text = (
+        "🧪 Получить тестовый доступ" if test_mode else "💳 Создать заявку на оплату"
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -409,7 +444,9 @@ def payment_request_keyboard(months: int, test_mode: bool = False) -> InlineKeyb
     )
 
 
-def confirm_payment_keyboard(provider_payment_id: str, months: int) -> InlineKeyboardMarkup:
+def confirm_payment_keyboard(
+    provider_payment_id: str, months: int
+) -> InlineKeyboardMarkup:
     """Build admin confirmation keyboard for a manual payment request."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -473,9 +510,9 @@ async def start(
     trial_available = False
     if telegram_id is not None:
         async with async_session_maker() as session:
-            _, user_created = await UserRepository(
-                session
-            ).get_or_create_from_telegram(message.from_user)
+            _, user_created = await UserRepository(session).get_or_create_from_telegram(
+                message.from_user
+            )
             await session.commit()
 
         if user_created:
@@ -587,9 +624,9 @@ async def check_payment_command(
         return
 
     async with async_session_maker() as session:
-        payment = await PaymentRepository(session).get_by_provider_payment_id_any_provider(
-            provider_payment_id
-        )
+        payment = await PaymentRepository(
+            session
+        ).get_by_provider_payment_id_any_provider(provider_payment_id)
 
     service = PlategaWebhookService(settings=settings, bot=message.bot)
     if payment is not None:
@@ -608,7 +645,9 @@ async def check_payment_command(
             if transaction is None:
                 provider_status = "Platega lookup не настроен"
             else:
-                provider_status = service._extract_transaction_status(transaction) or "—"
+                provider_status = (
+                    service._extract_transaction_status(transaction) or "—"
+                )
                 processed = await service.process_transaction_status(
                     provider_payment_id,
                     provider_status,
@@ -681,9 +720,9 @@ async def check_payment_command(
         transaction=transaction,
     )
     async with async_session_maker() as session:
-        payment = await PaymentRepository(session).get_by_provider_payment_id_any_provider(
-            provider_payment_id
-        )
+        payment = await PaymentRepository(
+            session
+        ).get_by_provider_payment_id_any_provider(provider_payment_id)
 
     if payment is None:
         await message.answer(
@@ -707,6 +746,102 @@ async def check_payment_command(
             header="💳 Platega orphan recovery",
         )
     )
+
+
+@router.message(Command("user"))
+async def user_command(
+    message: Message,
+    command: CommandObject,
+    settings: Settings,
+) -> None:
+    """Show safe user diagnostics for administrators."""
+    if message.from_user is None or message.from_user.id not in settings.admin_ids:
+        await message.answer("Недостаточно прав.")
+        return
+
+    args = (command.args or "").split()
+    if len(args) != 1:
+        await message.answer("Использование: <code>/user &lt;telegram_id&gt;</code>")
+        return
+
+    try:
+        telegram_id = int(args[0])
+    except ValueError:
+        await message.answer("Использование: <code>/user &lt;telegram_id&gt;</code>")
+        return
+
+    async with async_session_maker() as session:
+        user_repository = UserRepository(session)
+        subscription_repository = SubscriptionRepository(session)
+        benefit_repository = CustomerBenefitRepository(session)
+        referral_reward_repository = ReferralRewardRepository(session)
+        payment_repository = PaymentRepository(session)
+
+        user = await user_repository.get_by_telegram_id(telegram_id)
+        if user is None:
+            await message.answer(
+                f"Пользователь с Telegram ID <code>{escape(str(telegram_id))}</code> не найден."
+            )
+            return
+
+        active_subscription = await subscription_repository.get_active_by_telegram_id(
+            telegram_id
+        )
+        discount_percent = (
+            await benefit_repository.get_active_discount_percent_by_telegram_id(
+                telegram_id
+            )
+        )
+        pending_bonus_days = (
+            await referral_reward_repository.get_pending_bonus_days_by_telegram_id(
+                telegram_id
+            )
+        )
+        payments = await payment_repository.get_latest_by_user_id(user.id, limit=5)
+
+    full_name = (
+        " ".join(part for part in [user.first_name, user.last_name] if part) or "—"
+    )
+    username = f"@{user.username}" if user.username else "—"
+    has_connection_link = bool(
+        active_subscription is not None
+        and active_subscription.vpn_config
+        and active_subscription.vpn_config.get("connection_link")
+    )
+
+    lines = [
+        "👤 Пользователь",
+        f"Telegram ID: <code>{escape(str(user.telegram_id))}</code>",
+        f"username: <code>{escape(username)}</code>",
+        f"full name: <code>{escape(full_name)}</code>",
+        f"trial used: <code>{format_yes_no(user.trial_used_at is not None)}</code>",
+        f"trial used at: <code>{format_optional_datetime(user.trial_used_at)}</code>",
+        f"trial subscription id: <code>{escape(str(user.trial_subscription_id or '—'))}</code>",
+        f"active subscription: <code>{format_yes_no(active_subscription is not None)}</code>",
+        f"subscription id: <code>{escape(str(active_subscription.id if active_subscription else '—'))}</code>",
+        f"expires at: <code>{format_optional_datetime(active_subscription.expires_at if active_subscription else None)}</code>",
+        f"xui_email: <code>{escape(active_subscription.xui_email if active_subscription else '—')}</code>",
+        f"connection link exists: <code>{format_yes_no(has_connection_link)}</code>",
+        f"early buyer discount percent: <code>{discount_percent}</code>",
+        f"pending referral bonus days: <code>{pending_bonus_days}</code>",
+        "",
+        "Последние 5 payments:",
+    ]
+    if not payments:
+        lines.append("—")
+    else:
+        for payment in payments:
+            lines.append(
+                "• "
+                f"provider=<code>{escape(payment.provider)}</code>; "
+                f"provider_payment_id=<code>{escape(payment.provider_payment_id or '—')}</code>; "
+                f"status=<code>{escape(str(payment.status))}</code>; "
+                f"amount=<code>{escape(str(payment.amount))} {escape(payment.currency)}</code>; "
+                f"tariff_months=<code>{escape(str(payment.tariff_months or '—'))}</code>; "
+                f"created_at=<code>{format_optional_datetime(payment.created_at)}</code>"
+            )
+
+    await message.answer("\n".join(lines))
 
 
 @router.message(Command("add_days"))
@@ -839,7 +974,9 @@ async def invite_friend(message: Message, settings: Settings) -> None:
         await message.answer("Реферальная программа сейчас недоступна.")
         return
 
-    code = await ReferralService(settings=settings).get_or_create_code(message.from_user.id)
+    code = await ReferralService(settings=settings).get_or_create_code(
+        message.from_user.id
+    )
     invite_url = f"{settings.bot_public_url}?start=ref_{code}"
     await message.answer(
         "🎁 Пригласить друга\n\n"
@@ -1186,7 +1323,9 @@ async def create_payment_request(
     base_price = TARIFF_PRICES[months]
     discount_percent = await benefit_service.get_active_discount_percent(user.id)
     final_price = apply_discount_to_price(base_price, discount_percent)
-    discount_summary = format_discount_summary(base_price, discount_percent, final_price)
+    discount_summary = format_discount_summary(
+        base_price, discount_percent, final_price
+    )
 
     payment_service = PaymentService(settings=settings)
     result: PaymentCreateResult = await payment_service.create_payment(
@@ -1206,7 +1345,7 @@ async def create_payment_request(
         )
         admin_text = (
             f"{admin_title}\n\n"
-            f"Пользователь: <a href=\"tg://user?id={user.id}\">{escape(user.full_name)}</a>\n"
+            f'Пользователь: <a href="tg://user?id={user.id}">{escape(user.full_name)}</a>\n'
             f"Telegram ID: <code>{user.id}</code>\n"
             f"Username: @{escape(user.username) if user.username else '—'}\n"
             f"Тариф: <b>{TARIFFS[months]}</b>\n"
@@ -1294,7 +1433,9 @@ async def confirm_payment(callback: CallbackQuery, settings: Settings) -> None:
             source="manual_confirm",
         )
     except ValueError:
-        await callback.answer("Платёж нельзя подтвердить в этом статусе", show_alert=True)
+        await callback.answer(
+            "Платёж нельзя подтвердить в этом статусе", show_alert=True
+        )
         return
     except XuiError as error:
         await notify_admins(
@@ -1433,8 +1574,7 @@ async def send_protected_link(message: Message, telegram_id: int) -> None:
         return
 
     await message.answer(
-        "🔗 Ваша ссылка для защищённого соединения:\n"
-        f"<code>{escape(link)}</code>"
+        "🔗 Ваша ссылка для защищённого соединения:\n" f"<code>{escape(link)}</code>"
     )
 
 
