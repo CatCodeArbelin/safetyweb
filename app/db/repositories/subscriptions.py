@@ -51,6 +51,25 @@ class SubscriptionRepository:
             .limit(1)
         )
 
+    async def get_by_last_payment_id_for_update(
+        self, telegram_id: int, provider_payment_id: str
+    ) -> Subscription | None:
+        """Return and lock an active subscription last changed by the given payment."""
+        return await self.session.scalar(
+            select(Subscription)
+            .join(Subscription.user)
+            .where(
+                User.telegram_id == telegram_id,
+                Subscription.status == SubscriptionStatus.ACTIVE,
+                Subscription.vpn_config["last_payment_id"].as_string()
+                == provider_payment_id,
+            )
+            .order_by(Subscription.expires_at.desc(), Subscription.created_at.desc())
+            .options(selectinload(Subscription.user))
+            .limit(1)
+            .with_for_update()
+        )
+
     async def create_active(
         self,
         *,
