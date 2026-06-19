@@ -16,6 +16,7 @@ from app.db.repositories.payments import PaymentRepository
 from app.db.session import async_session_maker
 from app.services.payment_service import PLATEGA_PROVIDER_NAME
 from app.services.platega_webhook_service import PlategaWebhookService
+from app.utils.sanitize import sanitize_dict, sanitize_headers
 
 if TYPE_CHECKING:
     from aiogram import Bot
@@ -50,7 +51,7 @@ def create_app(settings: Settings | None = None, bot: Bot | None = None) -> Fast
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=verification_error.detail,
             )
-        payload = await _json_payload(request)
+        payload = sanitize_dict(await _json_payload(request))
 
         provider_payment_id = _extract_first_str(
             payload,
@@ -185,6 +186,9 @@ async def _notify_rejected_callback_headers(
 
     from app.main import notify_admins
 
+    sanitized_merchant_headers = sanitize_headers(
+        {"x-merchantid": request.headers.get("x-merchantid") or "missing"}
+    )
     text = (
         "⚠️ Rejected Platega callback headers\n"
         f"Reason: invalid {reason.value}\n"
@@ -192,7 +196,7 @@ async def _notify_rejected_callback_headers(
         f"Client: {client_ip}\n"
         f"User-Agent: {request.headers.get('user-agent') or 'unknown'}\n"
         f"X-Forwarded-For: {request.headers.get('x-forwarded-for') or 'unknown'}\n"
-        f"Merchant ID: {request.headers.get('x-merchantid') or 'missing'}"
+        f"Merchant ID: {sanitized_merchant_headers['x-merchantid']}"
     )
     await notify_admins(bot, settings, text)
     _INVALID_HEADER_ALERTS[throttle_key] = now
@@ -204,12 +208,18 @@ def _expected_callback_secret(settings: Settings) -> str:
 
 
 def _safe_callback_headers(request: Request) -> dict[str, str | bool | None]:
-    return {
-        "merchant_id": request.headers.get("x-merchantid"),
-        "secret_verified": True,
-        "user_agent": request.headers.get("user-agent"),
-        "x_forwarded_for": request.headers.get("x-forwarded-for"),
-    }
+    return sanitize_headers(
+        {
+            "x-merchantid": request.headers.get("x-merchantid"),
+            "x-secret": request.headers.get("x-secret"),
+            "authorization": request.headers.get("authorization"),
+            "cookie": request.headers.get("cookie"),
+            "set-cookie": request.headers.get("set-cookie"),
+            "secret_verified": True,
+            "user_agent": request.headers.get("user-agent"),
+            "x_forwarded_for": request.headers.get("x-forwarded-for"),
+        }
+    )
 
 
 def _extract_first_str(data: dict[str, Any], *keys: str) -> str | None:

@@ -14,6 +14,7 @@ from app.db.repositories.users import UserRepository
 from app.db.session import async_session_maker
 from app.services.payment_finalization_service import PaymentFinalizationService
 from app.services.payment_service import PLATEGA_PROVIDER_NAME
+from app.utils.sanitize import sanitize_dict, sanitize_exception
 from app.services.platega_client import PlategaClient
 
 if TYPE_CHECKING:
@@ -557,35 +558,7 @@ class PlategaWebhookService:
 
     @classmethod
     def _sanitize_transaction(cls, data: dict[str, Any]) -> dict[str, Any]:
-        sanitized = cls._sanitize_value(data)
-        return sanitized if isinstance(sanitized, dict) else {}
-
-    @classmethod
-    def _sanitize_value(cls, value: Any) -> Any:
-        if isinstance(value, dict):
-            return {
-                str(key): (
-                    "***"
-                    if cls._is_sensitive_key(str(key))
-                    else cls._sanitize_value(item_value)
-                )
-                for key, item_value in value.items()
-            }
-        if isinstance(value, list):
-            return [cls._sanitize_value(item) for item in value]
-        if isinstance(value, Decimal):
-            if value == value.to_integral_value():
-                return int(value)
-            return str(value)
-        return value
-
-    @staticmethod
-    def _is_sensitive_key(key: str) -> bool:
-        normalized = key.lower()
-        return any(
-            marker in normalized
-            for marker in ("token", "secret", "password", "authorization", "api_key")
-        )
+        return sanitize_dict(data)
 
     @classmethod
     def _candidate_values(cls, data: Any, *keys: str) -> list[Any]:
@@ -659,7 +632,7 @@ class PlategaWebhookService:
 
     @staticmethod
     def _sanitize_error(error: Exception) -> str:
-        return " ".join(str(error).split())[:2000]
+        return sanitize_exception(error, limit=2000)
 
     async def _notify_admins(self, text: str) -> None:
         if self.bot is None:

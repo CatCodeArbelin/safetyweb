@@ -17,6 +17,7 @@ from app.db.models import Payment, PaymentStatus, User
 from app.db.repositories.payments import PaymentRepository
 from app.db.session import async_session_maker
 from app.services.platega_client import PlategaClient, build_platega_payload
+from app.utils.sanitize import sanitize_dict, sanitize_exception, sensitive_values_from
 
 
 MANUAL_PROVIDER_NAME: Final = "manual"
@@ -428,11 +429,7 @@ class PlategaPaymentProvider(PaymentProvider):
         return new_provider_data
 
     def _sanitize_error(self, error: Exception) -> str:
-        return str(
-            self._sanitize_provider_data({"error": " ".join(str(error).split())})[
-                "error"
-            ]
-        )[:2000]
+        return sanitize_exception(error, secrets=self._secret_values(), limit=2000)
 
     async def _notify_admins(self, text: str) -> None:
         if self.bot is None:
@@ -477,54 +474,12 @@ class PlategaPaymentProvider(PaymentProvider):
         return parsed
 
     def _sanitize_provider_data(self, data: dict[str, Any]) -> dict[str, Any]:
-        secret_values = [
-            secret.get_secret_value()
-            for secret in (
-                self.settings.platega_api_key,
-                self.settings.platega_callback_secret,
-            )
-            if secret is not None
-        ]
-        return self._sanitize_value(data, secret_values)
+        return sanitize_dict(data, secrets=self._secret_values())
 
-    @classmethod
-    def _sanitize_value(cls, value: Any, secret_values: list[str]) -> Any:
-        if isinstance(value, dict):
-            sanitized: dict[str, Any] = {}
-            for item_key, item_value in value.items():
-                key = str(item_key)
-                if cls._is_sensitive_key(key):
-                    sanitized[key] = "***"
-                else:
-                    sanitized[key] = cls._sanitize_value(item_value, secret_values)
-            return sanitized
-        if isinstance(value, list):
-            return [cls._sanitize_value(item, secret_values) for item in value]
-        if isinstance(value, str):
-            sanitized_text = value
-            for secret_value in secret_values:
-                if secret_value:
-                    sanitized_text = sanitized_text.replace(secret_value, "***")
-            return sanitized_text
-        if isinstance(value, Decimal):
-            if value == value.to_integral_value():
-                return int(value)
-            return str(value)
-        return value
-
-    @staticmethod
-    def _is_sensitive_key(key: str) -> bool:
-        normalized = key.lower()
-        return any(
-            marker in normalized
-            for marker in (
-                "secret",
-                "token",
-                "password",
-                "authorization",
-                "api_key",
-                "apikey",
-            )
+    def _secret_values(self) -> list[str]:
+        return sensitive_values_from(
+            self.settings.platega_api_key,
+            self.settings.platega_callback_secret,
         )
 
     async def get_payment_status(self, provider_payment_id: str) -> PaymentStatus:
