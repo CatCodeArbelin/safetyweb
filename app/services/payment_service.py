@@ -136,6 +136,7 @@ class ManualPaymentProvider(PaymentProvider):
             node = await NodeSelectorService(
                 settings=self.settings, session=self.session
             ).select_node_for_new_subscription()
+            node_reserved_at = datetime.now(tz=UTC)
             payment = await self._create_payment(
                 self.session,
                 user_id=user_id,
@@ -143,7 +144,9 @@ class ManualPaymentProvider(PaymentProvider):
                 amount=amount,
                 currency=currency,
                 reserved_node_key=node.key,
-                node_reservation_expires_at=datetime.now(tz=UTC)
+                reserved_node_name=node.name,
+                node_reserved_at=node_reserved_at,
+                node_reservation_expires_at=node_reserved_at
                 + timedelta(minutes=self.settings.node_reservation_ttl_minutes),
             )
             return self._create_result(payment)
@@ -152,6 +155,7 @@ class ManualPaymentProvider(PaymentProvider):
             node = await NodeSelectorService(
                 settings=self.settings, session=session
             ).select_node_for_new_subscription()
+            node_reserved_at = datetime.now(tz=UTC)
             payment = await self._create_payment(
                 session,
                 user_id=user_id,
@@ -159,7 +163,9 @@ class ManualPaymentProvider(PaymentProvider):
                 amount=amount,
                 currency=currency,
                 reserved_node_key=node.key,
-                node_reservation_expires_at=datetime.now(tz=UTC)
+                reserved_node_name=node.name,
+                node_reserved_at=node_reserved_at,
+                node_reservation_expires_at=node_reserved_at
                 + timedelta(minutes=self.settings.node_reservation_ttl_minutes),
             )
             await session.commit()
@@ -210,6 +216,8 @@ class ManualPaymentProvider(PaymentProvider):
         amount: Decimal | int | str,
         currency: str,
         reserved_node_key: str,
+        reserved_node_name: str | None,
+        node_reserved_at: datetime,
         node_reservation_expires_at: datetime,
     ) -> Payment:
         user = await ManualPaymentProvider._get_or_create_user(session, user_id)
@@ -221,6 +229,8 @@ class ManualPaymentProvider(PaymentProvider):
             currency=currency.upper(),
             description=f"Manual payment for tariff {tariff_id}",
             reserved_node_key=reserved_node_key,
+            reserved_node_name=reserved_node_name,
+            node_reserved_at=node_reserved_at,
             node_reservation_expires_at=node_reservation_expires_at,
         )
         session.add(payment)
@@ -304,7 +314,8 @@ class PlategaPaymentProvider(PaymentProvider):
             node = await NodeSelectorService(
                 settings=self.settings, session=session
             ).select_node_for_new_subscription()
-            reservation_expires_at = datetime.now(tz=UTC) + timedelta(
+            node_reserved_at = datetime.now(tz=UTC)
+            reservation_expires_at = node_reserved_at + timedelta(
                 minutes=self.settings.node_reservation_ttl_minutes
             )
             description = f"Payment for tariff {tariff_id}"
@@ -318,6 +329,8 @@ class PlategaPaymentProvider(PaymentProvider):
                 currency=currency,
                 description=description,
                 reserved_node_key=node.key,
+                reserved_node_name=node.name,
+                node_reserved_at=node_reserved_at,
                 node_reservation_expires_at=reservation_expires_at,
             )
             await session.commit()
