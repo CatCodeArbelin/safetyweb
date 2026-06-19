@@ -245,19 +245,16 @@ class PaymentRepository:
         return event
 
     async def get_retryable_webhook_events(
-        self, provider: str, now: datetime, limit: int = 100
+        self, provider: str, now: datetime, max_attempts: int, limit: int = 100
     ) -> list[PaymentWebhookEvent]:
-        """Load webhook events due for initial processing or retry."""
+        """Load webhook events due for initial processing or retry attempts."""
         statement = (
             select(PaymentWebhookEvent)
             .where(
                 PaymentWebhookEvent.provider == provider,
-                PaymentWebhookEvent.handling_state.in_(
-                    [
-                        PaymentWebhookHandlingState.PENDING,
-                        PaymentWebhookHandlingState.FAILED,
-                    ]
-                ),
+                PaymentWebhookEvent.processed_at.is_(None),
+                PaymentWebhookEvent.dead_lettered_at.is_(None),
+                PaymentWebhookEvent.attempt_count < max_attempts,
                 or_(
                     PaymentWebhookEvent.next_retry_at.is_(None),
                     PaymentWebhookEvent.next_retry_at <= now,

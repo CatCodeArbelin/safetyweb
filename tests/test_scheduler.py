@@ -133,8 +133,9 @@ async def test_process_pending_payment_webhooks_loads_platega_events(monkeypatch
         def __init__(self, session):
             self.session = session
 
-        async def get_retryable_webhook_events(self, *, provider, now):
+        async def get_retryable_webhook_events(self, *, provider, now, max_attempts):
             assert provider == scheduler_module.PLATEGA_PROVIDER_NAME
+            assert max_attempts == 5
             return events
 
         async def mark_webhook_attempt(self, event_id, attempted_at):
