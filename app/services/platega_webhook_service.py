@@ -62,6 +62,8 @@ class PlategaWebhookService:
                 await PaymentRepository(error_session).mark_webhook_failed(
                     webhook_event_id,
                     self._sanitize_error(error),
+                    retry_base_seconds=self.settings.platega_webhook_retry_base_seconds,
+                    retry_max_seconds=self.settings.platega_webhook_retry_max_seconds,
                 )
                 await error_session.commit()
             raise
@@ -78,7 +80,7 @@ class PlategaWebhookService:
             provider_payment_id = event.provider_payment_id
             if not provider_payment_id:
                 msg = "Platega webhook event does not contain provider payment id"
-                await repository.mark_webhook_failed(webhook_event_id, msg)
+                await self._mark_webhook_failed(repository, webhook_event_id, msg)
                 await session.commit()
                 return
 
@@ -97,7 +99,8 @@ class PlategaWebhookService:
                     f"webhook={provider_payment_id!r}, transaction={transaction_id!r}"
                 )
                 async with async_session_maker() as failed_session:
-                    await PaymentRepository(failed_session).mark_webhook_failed(
+                    await self._mark_webhook_failed(
+                        PaymentRepository(failed_session),
                         webhook_event_id,
                         msg,
                     )
@@ -144,7 +147,7 @@ class PlategaWebhookService:
                     f"Platega payment {provider_payment_id!r} was not found and "
                     "could not be recovered from transaction payload"
                 )
-                await repository.mark_webhook_failed(webhook_event_id, msg)
+                await self._mark_webhook_failed(repository, webhook_event_id, msg)
                 await session.commit()
                 return
 
@@ -179,6 +182,20 @@ class PlategaWebhookService:
                 datetime.now(tz=UTC),
             )
             await processed_session.commit()
+
+    async def _mark_webhook_failed(
+        self,
+        repository: PaymentRepository,
+        webhook_event_id: int,
+        message: str,
+    ) -> PaymentWebhookEvent | None:
+        """Mark a webhook failed using configured exponential retry backoff."""
+        return await repository.mark_webhook_failed(
+            webhook_event_id,
+            message,
+            retry_base_seconds=self.settings.platega_webhook_retry_base_seconds,
+            retry_max_seconds=self.settings.platega_webhook_retry_max_seconds,
+        )
 
     async def process_transaction_status(
         self,
