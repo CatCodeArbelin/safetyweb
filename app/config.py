@@ -1,10 +1,47 @@
 """Application configuration."""
 
+import json
 from typing import Annotated, Literal
 from urllib.parse import quote_plus
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+class XuiNodeConfig(BaseModel):
+    """Configuration for a single X-UI node."""
+
+    key: str
+    xui_base_url: str = "http://localhost:2053"
+    xui_public_host: str | None = None
+    xui_sub_base_url: str | None = None
+    xui_api_token: SecretStr | None = Field(default=None, repr=False)
+    xui_username: str
+    xui_password: SecretStr = Field(repr=False)
+    xui_inbound_ids: Annotated[list[int], NoDecode]
+
+    @field_validator("key")
+    @classmethod
+    def validate_key(cls, value: str) -> str:
+        """Validate node key is not empty."""
+        normalized = value.strip()
+        if not normalized:
+            msg = "X-UI node key must not be empty"
+            raise ValueError(msg)
+        return normalized
+
+    @field_validator("xui_inbound_ids", mode="before")
+    @classmethod
+    def parse_xui_inbound_ids(
+        cls,
+        value: str | list[int] | list[str] | None,
+    ) -> list[int]:
+        """Parse and validate node inbound IDs."""
+        inbound_ids = Settings._parse_int_list(value, "xui_inbound_ids")
+        if not inbound_ids:
+            msg = "xui_inbound_ids must not be empty"
+            raise ValueError(msg)
+        return inbound_ids
 
 
 class Settings(BaseSettings):
@@ -26,10 +63,14 @@ class Settings(BaseSettings):
     xui_base_url: str = "http://localhost:2053"
     xui_public_host: str | None = None
     xui_sub_base_url: str | None = None
-    xui_api_token: SecretStr | None = None
-    xui_username: str
-    xui_password: SecretStr
-    xui_inbound_ids: Annotated[list[int], NoDecode]
+    xui_api_token: SecretStr | None = Field(default=None, repr=False)
+    xui_username: str | None = None
+    xui_password: SecretStr | None = Field(default=None, repr=False)
+    xui_inbound_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
+    xui_nodes_json: Annotated[list[XuiNodeConfig], NoDecode] = Field(
+        default_factory=list,
+        repr=False,
+    )
     xui_expired_client_policy: str = "disable"
     xui_default_traffic_gb: int = 0
     xui_default_limit_ip: int = 1
@@ -80,8 +121,10 @@ class Settings(BaseSettings):
         return value.lower() if isinstance(value, str) else value
 
     @model_validator(mode="after")
-    def validate_platega_settings(self) -> "Settings":
-        """Validate Platega settings and default callback secret."""
+    def validate_settings(self) -> "Settings":
+        """Validate cross-field settings and defaults."""
+        self._validate_xui_nodes()
+
         if self.platega_callback_secret is None:
             self.platega_callback_secret = self.platega_api_key
 
@@ -105,6 +148,28 @@ class Settings(BaseSettings):
 
         return self
 
+    def _validate_xui_nodes(self) -> None:
+        """Validate X-UI node definitions and legacy fallback settings."""
+        nodes = self.xui_nodes_json
+        if nodes:
+            keys = [node.key for node in nodes]
+            if len(keys) != len(set(keys)):
+                msg = "XUI_NODES_JSON contains duplicate node keys"
+                raise ValueError(msg)
+            return
+
+        missing_fields = [
+            field_name
+            for field_name in ("xui_username", "xui_password")
+            if getattr(self, field_name) in (None, "")
+        ]
+        if missing_fields:
+            msg = "Legacy X-UI configuration requires: " + ", ".join(missing_fields)
+            raise ValueError(msg)
+        if not self.xui_inbound_ids:
+            msg = "XUI_INBOUND_IDS must not be empty"
+            raise ValueError(msg)
+
     @field_validator("xui_expired_client_policy")
     @classmethod
     def validate_xui_expired_client_policy(cls, value: str) -> str:
@@ -123,6 +188,24 @@ class Settings(BaseSettings):
     ) -> list[int]:
         """Parse XUI_INBOUND_IDS from a comma-separated string or a list."""
         return cls._parse_int_list(value, "XUI_INBOUND_IDS")
+
+    @field_validator("xui_nodes_json", mode="before")
+    @classmethod
+    def parse_xui_nodes_json(
+        cls,
+        value: str | list[dict[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        """Parse XUI_NODES_JSON from a JSON array."""
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            parsed = json.loads(value)
+        else:
+            parsed = value
+        if not isinstance(parsed, list):
+            msg = "XUI_NODES_JSON must be a JSON array"
+            raise TypeError(msg)
+        return parsed
 
     @field_validator("admin_ids", mode="before")
     @classmethod
@@ -157,3 +240,40 @@ class Settings(BaseSettings):
         port = self.postgres_port
         database = quote_plus(self.postgres_db)
         return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{database}"
+
+    @property
+    def xui_nodes(self) -> list[XuiNodeConfig]:
+        """Return configured X-UI nodes or the legacy default node."""
+        if self.xui_nodes_json:
+            return self.xui_nodes_json
+
+        if self.xui_username is None or self.xui_password is None:
+            msg = "Legacy X-UI configuration is incomplete"
+            raise ValueError(msg)
+
+        return [
+            XuiNodeConfig(
+                key="default",
+                xui_base_url=self.xui_base_url,
+                xui_public_host=self.xui_public_host,
+                xui_sub_base_url=self.xui_sub_base_url,
+                xui_api_token=self.xui_api_token,
+                xui_username=self.xui_username,
+                xui_password=self.xui_password,
+                xui_inbound_ids=self.xui_inbound_ids,
+            ),
+        ]
+
+    def get_xui_node(self, key: str) -> XuiNodeConfig:
+        """Return an X-UI node by key."""
+        normalized = key.strip()
+        if not normalized:
+            msg = "X-UI node key must not be empty"
+            raise ValueError(msg)
+
+        for node in self.xui_nodes:
+            if node.key == normalized:
+                return node
+
+        msg = f"X-UI node not found: {normalized}"
+        raise KeyError(msg)
