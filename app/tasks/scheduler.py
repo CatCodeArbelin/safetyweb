@@ -101,33 +101,54 @@ async def reconcile_platega_payments(bot: Bot, settings: Settings | None = None)
     now = datetime.now(tz=UTC)
     async with async_session_maker() as session:
         repository = PaymentRepository(session)
-        expired_payments = await repository.get_expired_pending_platega(now)
-        for payment in expired_payments:
-            payment.status = PaymentStatus.EXPIRED
-            payment.status_reason = "expired_locally"
-        await session.commit()
-
         pending_payments = await repository.get_pending_by_provider(PLATEGA_PROVIDER_NAME)
 
-    if not pending_payments:
+    payments_with_provider_id = [
+        payment for payment in pending_payments if payment.provider_payment_id
+    ]
+    if not payments_with_provider_id:
         return
 
     client = PlategaClient(settings=app_settings)
     service = PlategaWebhookService(settings=app_settings, bot=bot, client=client)
     try:
-        for payment in pending_payments:
-            if not payment.provider_payment_id:
+        for payment in payments_with_provider_id:
+            provider_payment_id = payment.provider_payment_id
+            if provider_payment_id is None:
                 continue
-            transaction = await client.get_transaction(payment.provider_payment_id)
+
+            transaction = await client.get_transaction(provider_payment_id)
             status = service._extract_transaction_status(transaction)
             await service.process_transaction_status(
-                payment.provider_payment_id,
+                provider_payment_id,
                 status,
                 months=payment.tariff_months,
                 transaction=transaction,
             )
+            if (
+                (status or "").strip().upper() == "PENDING"
+                and payment.provider_expires_at is not None
+                and payment.provider_expires_at < now
+            ):
+                await _expire_verified_pending_platega_payment(provider_payment_id)
     finally:
         await client.close()
+
+
+async def _expire_verified_pending_platega_payment(provider_payment_id: str) -> None:
+    """Mark a verified-still-pending Platega payment as locally expired."""
+    async with async_session_maker() as session:
+        repository = PaymentRepository(session)
+        payment = await repository.get_by_provider_payment_id_for_update(
+            PLATEGA_PROVIDER_NAME,
+            provider_payment_id,
+        )
+        if payment is None or payment.status != PaymentStatus.PENDING:
+            return
+
+        payment.status = PaymentStatus.EXPIRED
+        payment.status_reason = "expired_locally"
+        await session.commit()
 
 
 async def expire_subscriptions(bot: Bot, settings: Settings | None = None) -> None:
