@@ -101,12 +101,6 @@ class PlategaWebhookService:
                         msg,
                     )
                     await failed_session.commit()
-                await self._notify_admins(
-                    "Platega webhook transaction id mismatch\n"
-                    f"Webhook event ID: <code>{webhook_event_id}</code>\n"
-                    f"Webhook payment ID: <code>{escape(provider_payment_id)}</code>\n"
-                    f"Transaction ID: <code>{escape(str(transaction_id))}</code>",
-                )
                 return
 
             transaction_status = self._extract_transaction_status(verified_transaction)
@@ -151,12 +145,6 @@ class PlategaWebhookService:
                 )
                 await repository.mark_webhook_failed(webhook_event_id, msg)
                 await session.commit()
-                await self._notify_admins(
-                    "Не удалось восстановить Platega-платеж из webhook\n"
-                    f"Webhook event ID: <code>{webhook_event_id}</code>\n"
-                    f"Payment ID: <code>{escape(provider_payment_id)}</code>\n"
-                    "Доступ не выдавался.",
-                )
                 return
 
             db_event = await repository.get_webhook_event(webhook_event_id)

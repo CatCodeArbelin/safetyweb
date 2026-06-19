@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 from app.config import Settings
 from app.db.models import (
     PaymentStatus,
+    PaymentWebhookHandlingState,
     Subscription,
     SubscriptionNotification,
     SubscriptionNotificationType,
@@ -89,12 +90,68 @@ async def process_pending_payment_webhooks(
     if app_settings.test_mode:
         return
 
+    now = datetime.now(tz=UTC)
     async with async_session_maker() as session:
         repository = PaymentRepository(session)
-        events = await repository.get_unprocessed_webhook_events(provider=PLATEGA_PROVIDER_NAME)
+        events = await repository.get_retryable_webhook_events(
+            provider=PLATEGA_PROVIDER_NAME,
+            now=now,
+        )
 
+    service = PlategaWebhookService(settings=app_settings, bot=bot)
     for event in events:
-        await PlategaWebhookService(settings=app_settings, bot=bot).process_event(event.id)
+        async with async_session_maker() as session:
+            attempt_event = await PaymentRepository(session).mark_webhook_attempt(
+                event.id,
+                datetime.now(tz=UTC),
+            )
+            await session.commit()
+            if attempt_event is None:
+                continue
+            attempt_count = attempt_event.retry_count
+
+        try:
+            await service.process_event(event.id)
+        except Exception:
+            pass
+
+        await _mark_webhook_dead_if_exhausted(
+            bot=bot,
+            settings=app_settings,
+            event_id=event.id,
+            max_retries=app_settings.platega_webhook_max_retries,
+            attempt_count=attempt_count,
+        )
+
+
+async def _mark_webhook_dead_if_exhausted(
+    *,
+    bot: Bot,
+    settings: Settings,
+    event_id: int,
+    max_retries: int,
+    attempt_count: int,
+) -> None:
+    """Move a failed webhook event to dead state after retry exhaustion."""
+    if attempt_count < max_retries:
+        return
+
+    async with async_session_maker() as session:
+        repository = PaymentRepository(session)
+        event = await repository.get_webhook_event(event_id)
+        if event is None or event.handling_state != PaymentWebhookHandlingState.FAILED:
+            return
+
+        error = event.processing_error or "Webhook retry limit exceeded"
+        await repository.mark_webhook_dead(event_id, error)
+        await session.commit()
+
+    await PlategaWebhookService(settings=settings, bot=bot)._notify_admins(
+        "Platega webhook переведен в dead после исчерпания retry\n"
+        f"Webhook event ID: <code>{event_id}</code>\n"
+        f"Attempts: <code>{attempt_count}</code>\n"
+        f"Error: <code>{error}</code>",
+    )
 
 
 async def reconcile_platega_payments(bot: Bot, settings: Settings | None = None) -> None:
