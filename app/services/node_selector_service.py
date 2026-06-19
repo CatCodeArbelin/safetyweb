@@ -92,6 +92,14 @@ class NodeSelectorService:
         async with async_session_maker() as session:
             return await self._select_node_for_new_subscription(session)
 
+    async def get_capacity_snapshot(self) -> list[NodeCapacityInfo]:
+        """Return the current configured node capacity snapshot."""
+        if self.session is not None:
+            return await self._get_capacity_snapshot(self.session)
+
+        async with async_session_maker() as session:
+            return await self._get_capacity_snapshot(session)
+
     def get_node_for_subscription(self, subscription: Subscription) -> XuiNodeConfig:
         """Return the configured node assigned to a subscription."""
         node_key = subscription.node_key
@@ -131,6 +139,34 @@ class NodeSelectorService:
             raise NoAvailableNodeError(msg)
 
         return min(eligible_nodes, key=lambda item: item[:3])[3]
+
+    async def _get_capacity_snapshot(
+        self,
+        session: AsyncSession,
+    ) -> list[NodeCapacityInfo]:
+        """Build capacity rows for all configured X-UI nodes."""
+        occupancy_counts = await get_node_occupancy_counts(session)
+        snapshot: list[NodeCapacityInfo] = []
+        for node in self.settings.xui_nodes:
+            active_count, reserved_count = occupancy_counts.get(node.key, (0, 0))
+            limit = node.max_active_subscriptions
+            if limit is None:
+                limit = self.settings.xui_default_max_active_subscriptions
+            has_capacity = node.enabled and (
+                limit is None or active_count + reserved_count < limit
+            )
+            snapshot.append(
+                NodeCapacityInfo(
+                    key=node.key,
+                    name=node.name,
+                    enabled=node.enabled,
+                    active_count=active_count,
+                    reserved_count=reserved_count,
+                    max_active_subscriptions=limit,
+                    has_capacity=has_capacity,
+                )
+            )
+        return snapshot
 
     @staticmethod
     async def _get_active_subscription_counts(
