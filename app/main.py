@@ -5,6 +5,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from html import escape
+from typing import Any, Awaitable
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -1883,6 +1884,63 @@ async def support(message: Message, settings: Settings) -> None:
     await message.answer(support_contact_text(settings))
 
 
+async def run_http_server(settings: Settings, bot: Bot) -> None:
+    """Run the Platega webhook HTTP server until cancelled."""
+    if settings.payment_provider != "platega" or settings.test_mode:
+        return
+
+    config = uvicorn.Config(
+        create_app(settings=settings, bot=bot),
+        host=settings.app_http_host,
+        port=settings.app_http_port,
+        log_level="info",
+    )
+    server = uvicorn.Server(config)
+    serve_task = asyncio.create_task(server.serve())
+    try:
+        await asyncio.shield(serve_task)
+    finally:
+        server.should_exit = True
+        if not serve_task.done():
+            try:
+                await asyncio.wait_for(serve_task, timeout=10)
+            except TimeoutError:
+                serve_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await serve_task
+
+
+async def run_scheduler(settings: Settings, bot: Bot) -> None:
+    """Run background scheduler jobs until cancelled."""
+    scheduler = create_scheduler(bot=bot, settings=settings)
+    scheduler.start()
+    try:
+        await asyncio.Event().wait()
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+async def _run_until_first_service_stops(*coroutines: Awaitable[Any]) -> None:
+    """Run supervised services and cancel siblings when any service stops."""
+    tasks = {asyncio.create_task(coroutine) for coroutine in coroutines}
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        for task in pending:
+            with suppress(asyncio.CancelledError):
+                await task
+        for task in done:
+            task.result()
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        for task in tasks:
+            with suppress(asyncio.CancelledError):
+                await task
+
+
 async def main() -> None:
     """Start the Telegram bot with Redis-backed FSM storage."""
     settings = Settings()
@@ -1893,33 +1951,19 @@ async def main() -> None:
     )
     dispatcher = Dispatcher(storage=storage)
     dispatcher.include_router(router)
-    scheduler = create_scheduler(bot=bot, settings=settings)
-    scheduler.start()
-    server: uvicorn.Server | None = None
-    http_task: asyncio.Task[None] | None = None
 
+    services: list[Awaitable[Any]] = [
+        dispatcher.start_polling(bot, settings=settings),
+        run_scheduler(settings, bot),
+    ]
     if settings.payment_provider == "platega" and not settings.test_mode:
-        config = uvicorn.Config(
-            create_app(settings=settings, bot=bot),
-            host=settings.app_http_host,
-            port=settings.app_http_port,
-            log_level="info",
-        )
-        server = uvicorn.Server(config)
-        http_task = asyncio.create_task(server.serve())
+        services.append(run_http_server(settings, bot))
 
     try:
-        await dispatcher.start_polling(bot, settings=settings)
+        await _run_until_first_service_stops(*services)
     finally:
-        scheduler.shutdown(wait=False)
-        if server is not None and http_task is not None:
-            server.should_exit = True
-            try:
-                await asyncio.wait_for(http_task, timeout=10)
-            except TimeoutError:
-                http_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await http_task
+        await bot.session.close()
+        await storage.close()
 
 
 if __name__ == "__main__":
