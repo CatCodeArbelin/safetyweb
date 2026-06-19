@@ -25,6 +25,17 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
+from app.bot_commands import (
+    BTN_BUY_ACCESS,
+    BTN_DOCUMENTS,
+    BTN_INSTRUCTION,
+    BTN_INVITE_FRIEND,
+    BTN_MY_LINK,
+    BTN_MY_SUBSCRIPTION,
+    BTN_PROFILE,
+    BTN_SUPPORT,
+    render_admin_help_text,
+)
 from app.config import Settings, XuiNodeConfig
 from app.http_app import create_app
 from app.db.repositories import (
@@ -75,14 +86,6 @@ PROVISIONING_USER_ERROR = (
     "Не удалось автоматически выдать или продлить доступ из-за технической ошибки..."
 )
 
-BTN_BUY_ACCESS = "🛒 Оформить / продлить"
-BTN_PROFILE = "👤 Мой профиль"
-BTN_MY_SUBSCRIPTION = "📅 Моя подписка"
-BTN_MY_LINK = "🔗 Моя ссылка"
-BTN_INSTRUCTION = "📲 Инструкция"
-BTN_SUPPORT = "💬 Поддержка"
-BTN_DOCUMENTS = "📄 Документы"
-BTN_INVITE_FRIEND = "🎁 Пригласить друга"
 TARIFF_EMOJIS = {1: "🔹", 3: "🔷", 6: "💎", 12: "👑"}
 
 router = Router(name="safetyweb")
@@ -658,50 +661,7 @@ async def tariffs_command(message: Message, settings: Settings) -> None:
 
 def admin_help_text() -> str:
     """Return the complete administrator help text."""
-    return (
-        "Справка администратора ЛадНет:\n\n"
-        "Пользовательские slash-команды:\n"
-        "• /start — открыть главное меню.\n"
-        "• /help — помощь по сервису и контакты поддержки.\n"
-        "• /docs — документы и полезная информация.\n"
-        "• /tariffs — актуальные тарифы и условия оплаты.\n"
-        "• /subscription — статус подписки.\n"
-        "• /invite — реферальная ссылка пользователя.\n"
-        "• /renew — оформление или продление цифрового доступа.\n"
-        "• /link — ссылка для защищённого соединения при активной подписке.\n\n"
-        "Deep-link сценарии /start:\n"
-        "• /start pay_return — возврат после успешного перехода из оплаты.\n"
-        "• /start pay_failed — возврат после неуспешной оплаты.\n"
-        "• /start ref_&lt;code&gt; — регистрация реферального приглашения.\n\n"
-        "Админские slash-команды:\n"
-        "• /admin — открыть административное меню.\n"
-        "• /ahelp — список всех команд администратора.\n"
-        "• /stats — общая статистика пользователей, подписок, оплат, скидок и рефералки.\n"
-        "• /nodes — безопасная сводка по настроенным нодам.\n"
-        "• /node &lt;node_key&gt; — безопасная диагностика одной ноды.\n"
-        "• /check_payment &lt;provider_payment_id&gt; — проверить и при необходимости финализировать платёж.\n"
-        "• /payment &lt;provider_payment_id&gt; — alias для /check_payment.\n"
-        "• /user &lt;telegram_id&gt; — карточка пользователя, подписка, trial, скидки, рефералка и платежи.\n"
-        "• /add_days &lt;telegram_id&gt; &lt;days&gt; [reason] — вручную добавить дни к активной подписке.\n\n"
-        "Текстовые админ-команды:\n"
-        "• Админ — открыть административное меню.\n"
-        "• XUI debug — проверить доступность OpenAPI внешнего контура без создания пользователя.\n\n"
-        "Основные пользовательские кнопки:\n"
-        f"• {BTN_BUY_ACCESS} — выбрать тариф и создать заявку на оплату.\n"
-        f"• {BTN_PROFILE} — профиль, подписка, ссылка, документы и продление.\n"
-        f"• {BTN_INVITE_FRIEND} — получить реферальную ссылку.\n"
-        f"• {BTN_INSTRUCTION} — краткая инструкция по настройке.\n"
-        f"• {BTN_SUPPORT} — контакты поддержки.\n"
-        f"• {BTN_MY_SUBSCRIPTION} — статус подписки из профиля.\n"
-        f"• {BTN_MY_LINK} — ссылка защищённого соединения из профиля.\n"
-        f"• {BTN_DOCUMENTS} — документы из профиля.\n\n"
-        "При добавлении новой slash-команды, текстовой админ-команды "
-        "или важной пользовательской команды обновите /ahelp и README."
-    )
-
-
-# Keep this list in sync with bot command handlers.
-# When adding a new command, update /ahelp and README.
+    return render_admin_help_text()
 
 
 @router.message(Command("ahelp"))
