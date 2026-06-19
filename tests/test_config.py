@@ -53,6 +53,7 @@ def test_xui_nodes_json_accepts_canonical_node_keys() -> None:
                 "public_host": "public.example.test",
                 "sub_base_url": "https://sub.example.test",
                 "api_token": "node-token",
+                "auth_mode": "api_token",
                 "username": "xui-user",
                 "password": "xui-password",
                 "inbound_ids": [1, 2],
@@ -74,6 +75,7 @@ def test_xui_nodes_json_accepts_canonical_node_keys() -> None:
     assert node.xui_sub_base_url == "https://sub.example.test"
     assert node.xui_api_token is not None
     assert node.xui_api_token.get_secret_value() == "node-token"
+    assert node.xui_auth_mode == "api_token"
     assert node.xui_username == "xui-user"
     assert node.xui_password.get_secret_value() == "xui-password"
     assert node.xui_inbound_ids == [1, 2]
@@ -100,6 +102,7 @@ def test_xui_nodes_falls_back_to_legacy_default_node() -> None:
     assert node.name == "Default"
     assert node.xui_base_url == "https://legacy-panel.example.test"
     assert node.xui_public_host == "legacy-public.example.test"
+    assert node.xui_auth_mode == "session_cookie"
     assert node.xui_username == "legacy-user"
     assert node.xui_password.get_secret_value() == "legacy-password"
     assert node.xui_inbound_ids == [3, 4]

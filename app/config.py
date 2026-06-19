@@ -45,6 +45,10 @@ class XuiNodeConfig(BaseModel):
         repr=False,
         validation_alias=AliasChoices("api_token", "xui_api_token"),
     )
+    xui_auth_mode: Literal["session_cookie", "api_token"] = Field(
+        default="session_cookie",
+        validation_alias=AliasChoices("auth_mode", "xui_auth_mode"),
+    )
     xui_username: str = Field(
         validation_alias=AliasChoices("username", "xui_username"),
     )
@@ -146,6 +150,7 @@ class Settings(BaseSettings):
     xui_public_host: str | None = None
     xui_sub_base_url: str | None = None
     xui_api_token: SecretStr | None = Field(default=None, repr=False)
+    xui_auth_mode: Literal["session_cookie", "api_token"] = "session_cookie"
     xui_username: str | None = None
     xui_password: SecretStr | None = Field(default=None, repr=False)
     xui_inbound_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
@@ -348,6 +353,7 @@ class Settings(BaseSettings):
                 xui_public_host=self.xui_public_host,
                 xui_sub_base_url=self.xui_sub_base_url,
                 xui_api_token=self.xui_api_token,
+                xui_auth_mode=self.xui_auth_mode,
                 xui_username=self.xui_username,
                 xui_password=self.xui_password,
                 xui_inbound_ids=self.xui_inbound_ids,

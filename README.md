@@ -47,6 +47,7 @@ POSTGRES_PASSWORD=replace-me
 # Protected access integration settings.
 XUI_BASE_URL=https://example.com
 XUI_PUBLIC_HOST=example.com
+XUI_AUTH_MODE=session_cookie
 XUI_USERNAME=replace-me
 XUI_PASSWORD=replace-me
 XUI_INBOUND_IDS=1
@@ -68,18 +69,19 @@ TEST_MODE_REFERRAL_REWARDS_ENABLED=false
 
 - `XUI_BASE_URL` — базовый URL внешнего контура цифрового доступа, например `https://example.com`.
 - `XUI_PUBLIC_HOST` — публичный домен или IP-адрес, который будет подставляться в ссылку для защищённого соединения, например `example.com`.
+- `XUI_AUTH_MODE` — режим аутентификации внешнего контура: `session_cookie` (по умолчанию, вход по логину и паролю) или `api_token` (заголовок `Authorization: Bearer ...`; при пустом `XUI_API_TOKEN` используется cookie-сессия).
 - `XUI_USERNAME` — имя пользователя администратора внешнего контура цифрового доступа.
 - `XUI_PASSWORD` — пароль администратора внешнего контура цифрового доступа.
 - `XUI_INBOUND_IDS` — ID направлений через запятую, в которые бот будет добавлять записи цифрового доступа.
 
 ## Multi-node режим
 
-По умолчанию бот работает в legacy single-node режиме: используются обычные переменные `XUI_BASE_URL`, `XUI_PUBLIC_HOST`, `XUI_SUB_BASE_URL`, `XUI_API_TOKEN`, `XUI_USERNAME`, `XUI_PASSWORD`, `XUI_INBOUND_IDS`, `XUI_DEFAULT_TRAFFIC_GB` и `XUI_DEFAULT_LIMIT_IP`. Этот режим подходит для одной 3x-ui-ноды и сохраняет обратную совместимость с существующими `.env`.
+По умолчанию бот работает в legacy single-node режиме: используются обычные переменные `XUI_BASE_URL`, `XUI_PUBLIC_HOST`, `XUI_SUB_BASE_URL`, `XUI_API_TOKEN`, `XUI_AUTH_MODE`, `XUI_USERNAME`, `XUI_PASSWORD`, `XUI_INBOUND_IDS`, `XUI_DEFAULT_TRAFFIC_GB` и `XUI_DEFAULT_LIMIT_IP`. Этот режим подходит для одной 3x-ui-ноды и сохраняет обратную совместимость с существующими `.env`.
 
 Для нескольких нод задайте `XUI_NODES_JSON` — JSON-массив объектов нод. Если переменная заполнена, конфигурация нод берётся из неё, а legacy `XUI_*` переменные остаются запасным single-node способом конфигурации. Пример компактного значения:
 
 ```env
-XUI_NODES_JSON=[{"key":"main","name":"Primary node","enabled":true,"base_url":"https://node-1.example.com:31293/webPath","public_host":"node-1.example.com","sub_base_url":"https://node-1.example.com/sub/","api_token":"","username":"admin","password":"change-me","inbound_ids":[1,2,3],"default_traffic_gb":0,"default_limit_ip":1},{"key":"backup","name":"Backup node","enabled":false,"base_url":"https://node-2.example.com:31293/webPath","public_host":"node-2.example.com","sub_base_url":"https://node-2.example.com/sub/","api_token":"","username":"admin","password":"change-me","inbound_ids":[1]}]
+XUI_NODES_JSON=[{"key":"main","name":"Primary node","enabled":true,"base_url":"https://node-1.example.com:31293/webPath","public_host":"node-1.example.com","sub_base_url":"https://node-1.example.com/sub/","api_token":"","auth_mode":"session_cookie","username":"admin","password":"change-me","inbound_ids":[1,2,3],"default_traffic_gb":0,"default_limit_ip":1},{"key":"backup","name":"Backup node","enabled":false,"base_url":"https://node-2.example.com:31293/webPath","public_host":"node-2.example.com","sub_base_url":"https://node-2.example.com/sub/","api_token":"","auth_mode":"session_cookie","username":"admin","password":"change-me","inbound_ids":[1]}]
 ```
 
 Основные правила работы multi-node режима:
@@ -271,7 +273,7 @@ TEST_MODE — это режим разработки. Он позволяет п
 
 - Структура проекта содержит отдельные слои `app/db`, `app/db/repositories`, `app/services`, `app/tasks` и точку входа `app/main.py`.
 - База данных хранит пользователей, подписки, платежи, ноды цифрового доступа и одноразовые события уведомлений о сроке подписки.
-- `XuiClient` работает только через HTTP API внешнего контура цифрового доступа, использует cookie-сессию после `login()` и повторяет запрос после 401/403.
+- `XuiClient` работает только через HTTP API внешнего контура цифрового доступа, по умолчанию использует cookie-сессию после `login()`, поддерживает режим `XUI_AUTH_MODE=api_token` с Bearer-токеном и повторяет cookie-запрос после 401/403.
 - Redis используется как FSM storage aiogram; периодические задачи раз в час отправляют напоминания и отключают или удаляют истёкшие подписки.
 - Платёжный слой содержит общий интерфейс провайдера и ручную MVP-реализацию через `ManualPaymentProvider`; новые платёжные интеграции добавляются отдельными реализациями этого интерфейса.
 

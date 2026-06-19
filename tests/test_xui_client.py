@@ -10,6 +10,7 @@ def _settings() -> Settings:
         postgres_password=SecretStr("postgres-password"),
         xui_base_url="https://legacy-panel.example.test/path/",
         xui_api_token=SecretStr("legacy-token"),
+        xui_auth_mode="api_token",
         xui_username="legacy-user",
         xui_password=SecretStr("legacy-password"),
         xui_inbound_ids=[1],
@@ -22,6 +23,7 @@ def test_xui_client_uses_node_connection_settings_when_node_is_provided() -> Non
         key="node-a",
         xui_base_url="https://node-panel.example.test/base/",
         xui_api_token=SecretStr("node-token"),
+        xui_auth_mode="api_token",
         xui_username="node-user",
         xui_password=SecretStr("node-password"),
         xui_inbound_ids=[2, 3],
@@ -75,3 +77,24 @@ def test_xui_client_redacts_sensitive_diagnostics() -> None:
     assert "secret-token" not in text
     assert "secret-bearer" not in text
     assert "session-secret" not in text
+
+
+def test_xui_client_uses_session_cookie_by_default_even_with_token() -> None:
+    settings = _settings()
+    settings.xui_auth_mode = "session_cookie"
+
+    client = XuiClient(settings)
+
+    assert client._api_token == ""
+    assert "Authorization" not in client._client.headers
+
+
+def test_xui_client_falls_back_to_session_cookie_when_api_token_empty() -> None:
+    settings = _settings()
+    settings.xui_api_token = SecretStr("")
+    settings.xui_auth_mode = "api_token"
+
+    client = XuiClient(settings)
+
+    assert client._api_token == ""
+    assert "Authorization" not in client._client.headers
