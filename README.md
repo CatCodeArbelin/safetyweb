@@ -56,6 +56,7 @@ XUI_DEFAULT_TRAFFIC_GB=0
 XUI_DEFAULT_LIMIT_IP=1
 XUI_DEFAULT_MAX_ACTIVE_SUBSCRIPTIONS=50
 NODE_RESERVATION_TTL_MINUTES=30
+XUI_NODES_JSON=
 
 # Comma-separated Telegram user IDs with administrator permissions.
 ADMIN_IDS=123456789,987654321
@@ -91,7 +92,7 @@ TEST_MODE_REFERRAL_REWARDS_ENABLED=false
 Для нескольких нод задайте `XUI_NODES_JSON` — JSON-массив объектов нод. Если переменная заполнена, конфигурация нод берётся из неё, а legacy `XUI_*` переменные остаются запасным single-node способом конфигурации. Пример компактного значения:
 
 ```env
-XUI_NODES_JSON=[{"key":"main","name":"Primary node","enabled":true,"max_active_subscriptions":50,"weight":1,"base_url":"https://node-1.example.com:31293/webPath","public_host":"node-1.example.com","sub_base_url":"https://node-1.example.com/sub/","api_token":"","auth_mode":"session_cookie","username":"admin","password":"change-me","inbound_ids":[1,2,3],"default_traffic_gb":0,"default_limit_ip":1},{"key":"backup","name":"Backup node","enabled":false,"max_active_subscriptions":25,"weight":1,"base_url":"https://node-2.example.com:31293/webPath","public_host":"node-2.example.com","sub_base_url":"https://node-2.example.com/sub/","api_token":"","auth_mode":"session_cookie","username":"admin","password":"change-me","inbound_ids":[1]}]
+XUI_NODES_JSON=[{"key":"main","name":"Primary node","enabled":true,"base_url":"https://node-1.example.com:31293/webPath","public_host":"node-1.example.com","sub_base_url":"https://node-1.example.com/sub/","api_token":"","username":"admin","password":"change-me","inbound_ids":[1,2,3],"default_traffic_gb":0,"default_limit_ip":1,"max_active_subscriptions":50,"weight":1},{"key":"backup","name":"Backup node","enabled":true,"base_url":"https://node-2.example.com:31293/webPath","public_host":"node-2.example.com","sub_base_url":"https://node-2.example.com/sub/","api_token":"","username":"admin","password":"change-me","inbound_ids":[1,2],"default_traffic_gb":0,"default_limit_ip":1,"max_active_subscriptions":25,"weight":2}]
 ```
 
 Основные правила работы multi-node режима:
@@ -103,6 +104,23 @@ XUI_NODES_JSON=[{"key":"main","name":"Primary node","enabled":true,"max_active_s
 - `enabled=false` исключает ноду из выбора для новых подписок, но не удаляет и не отключает существующие подписки на этой ноде. Продления действующих подписок продолжают обращаться к сохранённой ноде по её `node_key`, если нода всё ещё присутствует в конфигурации.
 - Безопасное удаление ноды: сначала установите для неё `enabled=false`, дождитесь окончания или переноса всех active-подписок с этим `node_key`, проверьте отсутствие активных пользователей на ноде через админ-команды, и только после этого удаляйте объект ноды из `XUI_NODES_JSON`.
 - Администраторы могут использовать `/nodes`, чтобы посмотреть список настроенных нод и их состояние, и `/node <node_key>`, чтобы открыть подробную информацию по конкретной ноде.
+
+
+## Capacity management нод
+
+Capacity management ограничивает выдачу новых подписок по числу реально занятых слотов на 3x-ui нодах. Лимит задаётся через `XUI_DEFAULT_MAX_ACTIVE_SUBSCRIPTIONS` для legacy single-node режима или через поле `max_active_subscriptions` у объекта ноды в `XUI_NODES_JSON`; `NODE_RESERVATION_TTL_MINUTES` определяет срок временной резервации ноды на время оформления заказа.
+
+Правила учёта слотов:
+
+- Слот занимает только подписка со статусом `SubscriptionStatus.ACTIVE`. Подписки в статусах `expired` и `disabled` не считаются занятыми слотами и не уменьшают доступную capacity ноды.
+- При истечении или отключении подписки её `node_key` не обнуляется: связь с нодой сохраняется для аудита, диагностики и возможных ручных операций администратора.
+- Освобождение capacity в базе и физическое освобождение клиента в 3x-ui — разные операции. База перестаёт считать слот занятым после выхода подписки из `ACTIVE`, а фактическое отключение или удаление клиента в панели зависит от `XUI_EXPIRED_CLIENT_POLICY`.
+- Для коммерческого режима рекомендуется `XUI_EXPIRED_CLIENT_POLICY=delete`, чтобы истёкшие клиенты физически удалялись из 3x-ui и не накапливались на нодах. Значение `disable` подходит скорее для отладки или сценариев, где нужно временно сохранять клиента в панели.
+
+Поведение при оплате и выдаче доступа:
+
+- **Preflight перед созданием payment:** бот сначала проверяет наличие свободной enabled-ноды с учётом active-подписок и временных резерваций. Если свободных нод нет, payment не создаётся, пользователь не отправляется на оплату, а администратор получает уведомление о нехватке capacity.
+- **Paid-but-blocked:** если платёж уже стал `paid`, но выдача доступа заблокирована из-за отсутствия capacity или ошибки ноды, payment остаётся в статусе `paid`. Такая ситуация требует ручного вмешательства администратора: нужно освободить/добавить capacity, проверить ноду и повторить выдачу или решить вопрос с пользователем вручную.
 
 ## Запуск через Docker Compose
 
