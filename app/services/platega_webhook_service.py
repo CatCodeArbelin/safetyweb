@@ -19,6 +19,14 @@ if TYPE_CHECKING:
     from aiogram import Bot
 
 
+TERMINAL_PAYMENT_STATUSES = {
+    PaymentStatus.PAID,
+    PaymentStatus.FAILED,
+    PaymentStatus.REFUNDED,
+    PaymentStatus.EXPIRED,
+}
+
+
 def map_platega_status(status: str | None) -> PaymentStatus:
     """Map official Platega transaction statuses to local payment statuses."""
     normalized = (status or "").strip().upper()
@@ -217,6 +225,38 @@ class PlategaWebhookService:
             if provider_payment_method is not None:
                 payment.provider_payment_method = provider_payment_method
 
+            current_status = payment.status
+            mapped_status = map_platega_status(transaction_status)
+
+            if not self._is_status_transition_allowed(
+                current_status,
+                mapped_status,
+                transaction_status,
+            ):
+                payment.provider_data = {
+                    **(payment.provider_data or {}),
+                    "last_status_response": sanitized_transaction,
+                    "ignored_status_transition": {
+                        "from": str(current_status),
+                        "to": str(mapped_status),
+                        "provider_status": transaction_status,
+                        "at": datetime.now(tz=UTC).isoformat(),
+                    },
+                }
+                await session.commit()
+                if self._is_dangerous_status_conflict(
+                    current_status,
+                    mapped_status,
+                ):
+                    await self._notify_admins(
+                        "Platega прислала конфликтующий статус для платежа\n"
+                        f"Payment ID: <code>{escape(provider_payment_id)}</code>\n"
+                        f"Локальный статус: <code>{escape(str(current_status))}</code>\n"
+                        f"Статус Platega: <code>{escape(str(transaction_status))}</code>\n"
+                        "Локальный статус не изменялся.",
+                    )
+                return True
+
             if mapped_status == PaymentStatus.PAID:
                 payment_months = months or payment.tariff_months
                 if not payment_months:
@@ -240,24 +280,9 @@ class PlategaWebhookService:
                 payment.status = PaymentStatus.REFUNDED
                 payment.status_reason = f"{status_reason_prefix}: {transaction_status}"
                 await session.commit()
-                await self._notify_admins(
-                    "Получен возврат/chargeback по Platega-платежу\n"
-                    f"Payment ID: <code>{escape(provider_payment_id)}</code>\n"
-                    "Подписка не отключалась автоматически.",
-                )
                 return True
 
             if mapped_status == PaymentStatus.FAILED:
-                if payment.status == PaymentStatus.PAID:
-                    await session.commit()
-                    await self._notify_admins(
-                        "Platega прислала failed для уже оплаченного платежа\n"
-                        f"Payment ID: <code>{escape(provider_payment_id)}</code>\n"
-                        f"Статус Platega: <code>{escape(str(transaction_status))}</code>\n"
-                        "Локальный статус paid не откатывался.",
-                    )
-                    return True
-
                 payment.status = PaymentStatus.FAILED
                 payment.status_reason = f"{status_reason_prefix}: {transaction_status}"
                 await session.commit()
@@ -267,6 +292,55 @@ class PlategaWebhookService:
             payment.status_reason = f"{status_reason_prefix}: {transaction_status}"
             await session.commit()
             return True
+
+    @staticmethod
+    def _is_status_transition_allowed(
+        current_status: PaymentStatus,
+        mapped_status: PaymentStatus,
+        transaction_status: str | None,
+    ) -> bool:
+        if current_status == mapped_status:
+            return True
+
+        normalized_provider_status = (transaction_status or "").strip().upper()
+        if current_status == PaymentStatus.PENDING:
+            return mapped_status in {
+                PaymentStatus.PAID,
+                PaymentStatus.FAILED,
+                PaymentStatus.REFUNDED,
+                PaymentStatus.PENDING,
+            }
+
+        if current_status in {PaymentStatus.FAILED, PaymentStatus.EXPIRED}:
+            if mapped_status == PaymentStatus.PAID:
+                return normalized_provider_status == "CONFIRMED"
+            return mapped_status == current_status
+
+        if current_status == PaymentStatus.PAID:
+            if mapped_status == PaymentStatus.REFUNDED:
+                return normalized_provider_status == "CHARGEBACKED"
+            return mapped_status == PaymentStatus.PAID
+
+        if current_status == PaymentStatus.REFUNDED:
+            return mapped_status == PaymentStatus.REFUNDED
+
+        if current_status in TERMINAL_PAYMENT_STATUSES:
+            return False
+
+        return mapped_status == PaymentStatus.PENDING
+
+    @staticmethod
+    def _is_dangerous_status_conflict(
+        current_status: PaymentStatus,
+        mapped_status: PaymentStatus,
+    ) -> bool:
+        return (
+            current_status == PaymentStatus.PAID
+            and mapped_status in {PaymentStatus.FAILED, PaymentStatus.PENDING}
+        ) or (
+            current_status == PaymentStatus.REFUNDED
+            and mapped_status == PaymentStatus.PAID
+        )
 
     async def _recover_payment_by_internal_id(
         self,
