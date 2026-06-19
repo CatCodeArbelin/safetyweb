@@ -138,7 +138,7 @@ async def test_process_pending_payment_webhooks_loads_platega_events(monkeypatch
             return events
 
         async def mark_webhook_attempt(self, event_id, attempted_at):
-            return SimpleNamespace(id=event_id, retry_count=1)
+            return SimpleNamespace(id=event_id, attempt_count=1)
 
     class FakeService:
         def __init__(self, settings, bot):

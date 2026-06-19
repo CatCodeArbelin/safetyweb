@@ -109,7 +109,7 @@ async def process_pending_payment_webhooks(
             await session.commit()
             if attempt_event is None:
                 continue
-            attempt_count = attempt_event.retry_count
+            attempt_count = attempt_event.attempt_count
 
         try:
             await service.process_event(event.id)
@@ -143,8 +143,8 @@ async def _mark_webhook_dead_if_exhausted(
         if event is None or event.handling_state != PaymentWebhookHandlingState.FAILED:
             return
 
-        error = event.processing_error or "Webhook retry limit exceeded"
-        await repository.mark_webhook_dead(event_id, error)
+        error = event.last_error or "Webhook retry limit exceeded"
+        await repository.mark_webhook_dead(event_id, error, datetime.now(tz=UTC))
         await session.commit()
 
     await PlategaWebhookService(settings=settings, bot=bot)._notify_admins(
