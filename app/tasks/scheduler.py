@@ -28,6 +28,7 @@ from app.services.xui_client import XuiClient
 EXPIRATION_JOB_ID: Final = "expire_subscriptions"
 EXPIRATION_REMINDER_JOB_ID: Final = "subscription_expiration_reminders"
 PLATEGA_RECONCILE_JOB_ID: Final = "platega_reconcile_payments"
+PLATEGA_WEBHOOK_RETRY_JOB_ID: Final = "platega_retry_webhooks"
 REMINDER_WINDOWS: Final[tuple[tuple[int, SubscriptionNotificationType], ...]] = (
     (3, SubscriptionNotificationType.EXPIRES_IN_3_DAYS),
     (1, SubscriptionNotificationType.EXPIRES_IN_1_DAY),
@@ -58,20 +59,45 @@ def create_scheduler(bot: Bot | None = None, settings: Settings | None = None) -
         replace_existing=True,
         kwargs={"bot": bot},
     )
-    scheduler.add_job(
-        reconcile_platega_payments,
-        "interval",
-        seconds=app_settings.platega_reconcile_interval_seconds,
-        id=PLATEGA_RECONCILE_JOB_ID,
-        replace_existing=True,
-        kwargs={"bot": bot, "settings": app_settings},
-    )
+    if app_settings.payment_provider == "platega" and not app_settings.test_mode:
+        scheduler.add_job(
+            reconcile_platega_payments,
+            "interval",
+            seconds=app_settings.platega_reconcile_interval_seconds,
+            id=PLATEGA_RECONCILE_JOB_ID,
+            replace_existing=True,
+            kwargs={"bot": bot, "settings": app_settings},
+        )
+        scheduler.add_job(
+            process_pending_payment_webhooks,
+            "interval",
+            seconds=app_settings.platega_webhook_retry_interval_seconds,
+            id=PLATEGA_WEBHOOK_RETRY_JOB_ID,
+            replace_existing=True,
+            kwargs={"bot": bot, "settings": app_settings},
+        )
     return scheduler
+
+
+async def process_pending_payment_webhooks(
+    bot: Bot, settings: Settings | None = None
+) -> None:
+    """Retry pending or failed Platega webhook events."""
+    app_settings = settings or Settings()
+    async with async_session_maker() as session:
+        repository = PaymentRepository(session)
+        events = await repository.get_unprocessed_webhook_events(provider=PLATEGA_PROVIDER_NAME)
+
+    for event in events:
+        await PlategaWebhookService(settings=app_settings, bot=bot).process_event(event.id)
 
 
 async def reconcile_platega_payments(bot: Bot, settings: Settings | None = None) -> None:
     """Reconcile pending Platega payments against provider transaction status."""
     app_settings = settings or Settings()
+    if app_settings.payment_provider != "platega" or app_settings.test_mode:
+        return
+
     now = datetime.now(tz=UTC)
     async with async_session_maker() as session:
         repository = PaymentRepository(session)
