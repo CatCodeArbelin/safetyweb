@@ -220,7 +220,11 @@ class PaymentFinalizationService:
         if provision_result is None:
             return
 
-        text = self._build_user_notification(provision_result, status)
+        text = self._build_user_notification(
+            provision_result,
+            status,
+            payment.tariff_months,
+        )
         await self.bot.send_message(payment.user.telegram_id, text)
 
         async with async_session_maker() as session:
@@ -244,20 +248,61 @@ class PaymentFinalizationService:
     def _build_user_notification(
         provision_result: ProvisionResult,
         status: str,
+        tariff_months: int | None,
     ) -> str:
-        action_text = {
-            "created": "Доступ создан",
-            "extended": "Подписка продлена",
-            "attached_existing": "Подписка уже была активирована",
-        }.get(status, "Подписка активирована")
         expires_at = provision_result.expires_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
-        return (
-            "Оплата подтверждена ✅\n\n"
-            f"{action_text}.\n"
-            f"Действует до: <code>{escape(expires_at)}</code>\n\n"
+        expiry_line = f"Действует до: <code>{escape(expires_at)}</code>"
+        connection_link_block = (
             "Ваша ссылка для защищённого соединения:\n"
             f"<code>{escape(provision_result.connection_link)}</code>"
         )
+
+        if status == "attached_existing":
+            return "\n\n".join(("Оплата уже была обработана ✅", connection_link_block))
+
+        tariff_label = PaymentFinalizationService._format_tariff_label(tariff_months)
+        if status == "created":
+            status_line = f"Доступ создан на тариф <b>{escape(tariff_label)}</b>."
+            return "\n\n".join(
+                (
+                    "Оплата подтверждена ✅",
+                    "\n".join((status_line, expiry_line)),
+                    connection_link_block,
+                )
+            )
+
+        if status == "extended":
+            status_line = f"Подписка продлена на тариф <b>{escape(tariff_label)}</b>."
+            existing_link_line = "Ссылка для защищённого соединения остаётся прежней."
+            return "\n\n".join(
+                (
+                    "Оплата подтверждена ✅",
+                    "\n".join((status_line, existing_link_line, expiry_line)),
+                    connection_link_block,
+                )
+            )
+
+        return "\n\n".join(
+            (
+                "Оплата подтверждена ✅",
+                "\n".join(("Подписка активирована.", expiry_line)),
+                connection_link_block,
+            )
+        )
+
+    @staticmethod
+    def _format_tariff_label(tariff_months: int | None) -> str:
+        labels = {
+            1: "1 месяц",
+            3: "3 месяца",
+            6: "6 месяцев",
+            12: "12 месяцев",
+        }
+        if tariff_months in labels:
+            return labels[tariff_months]
+        if tariff_months is not None and tariff_months > 0:
+            return f"{tariff_months} мес."
+        return "выбранный период"
 
     async def _apply_pending_rewards(self, user_id: int) -> None:
         try:
