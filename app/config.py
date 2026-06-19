@@ -178,6 +178,8 @@ class Settings(BaseSettings):
     xui_expired_client_policy: str = "disable"
     xui_default_traffic_gb: int = 0
     xui_default_limit_ip: int = 1
+    xui_default_max_active_subscriptions: int | None = 50
+    node_reservation_ttl_minutes: int = 30
     test_mode: bool = False
     test_mode_referral_rewards_enabled: bool = False
     trial_access_enabled: bool = True
@@ -295,6 +297,34 @@ class Settings(BaseSettings):
         if not self.xui_inbound_ids:
             msg = "XUI_INBOUND_IDS must not be empty"
             raise ValueError(msg)
+
+    @field_validator("xui_default_max_active_subscriptions", mode="before")
+    @classmethod
+    def validate_xui_default_max_active_subscriptions(
+        cls,
+        value: int | str | None,
+    ) -> int | None:
+        """Validate legacy default node capacity is positive when configured."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"", "none", "null"}:
+                return None
+            value = int(normalized)
+        if value <= 0:
+            msg = "XUI_DEFAULT_MAX_ACTIVE_SUBSCRIPTIONS must be positive"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("node_reservation_ttl_minutes")
+    @classmethod
+    def validate_node_reservation_ttl_minutes(cls, value: int) -> int:
+        """Validate node reservation TTL is positive."""
+        if value <= 0:
+            msg = "NODE_RESERVATION_TTL_MINUTES must be positive"
+            raise ValueError(msg)
+        return value
 
     @field_validator("xui_expired_client_policy")
     @classmethod
@@ -417,6 +447,7 @@ class Settings(BaseSettings):
                 xui_username=self.xui_username,
                 xui_password=self.xui_password,
                 xui_inbound_ids=self.xui_inbound_ids,
+                max_active_subscriptions=self.xui_default_max_active_subscriptions,
             ),
         ]
 

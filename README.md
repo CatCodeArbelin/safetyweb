@@ -44,13 +44,18 @@ POSTGRES_DB=safetyweb
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=replace-me
 
-# Protected access integration settings.
-XUI_BASE_URL=https://example.com
+# 3x-ui panel connection settings.
+XUI_BASE_URL=https://example.com:31293/webPath
 XUI_PUBLIC_HOST=example.com
+XUI_SUB_BASE_URL=https://example.com/sub/
 XUI_AUTH_MODE=session_cookie
 XUI_USERNAME=replace-me
 XUI_PASSWORD=replace-me
 XUI_INBOUND_IDS=1
+XUI_DEFAULT_TRAFFIC_GB=0
+XUI_DEFAULT_LIMIT_IP=1
+XUI_DEFAULT_MAX_ACTIVE_SUBSCRIPTIONS=50
+NODE_RESERVATION_TTL_MINUTES=30
 
 # Comma-separated Telegram user IDs with administrator permissions.
 ADMIN_IDS=123456789,987654321
@@ -67,27 +72,33 @@ TEST_MODE_REFERRAL_REWARDS_ENABLED=false
 
 Внешний контур цифрового доступа запускается и администрируется отдельно: compose-файл проекта поднимает только бота, PostgreSQL и Redis. Для интеграции обязательно заполните:
 
-- `XUI_BASE_URL` — базовый URL внешнего контура цифрового доступа, например `https://example.com`.
+- `XUI_BASE_URL` — базовый URL 3x-ui панели без `/login` или `/panel/api`, например `https://example.com:31293/webPath`.
 - `XUI_PUBLIC_HOST` — публичный домен или IP-адрес, который будет подставляться в ссылку для защищённого соединения, например `example.com`.
+- `XUI_SUB_BASE_URL` — публичный базовый URL подписок, например `https://example.com/sub/`; можно оставить пустым, если он не нужен.
+- `XUI_API_TOKEN` — Bearer-токен для `XUI_AUTH_MODE=api_token`; можно оставить пустым для cookie-сессии.
 - `XUI_AUTH_MODE` — режим аутентификации внешнего контура: `session_cookie` (по умолчанию, вход по логину и паролю) или `api_token` (заголовок `Authorization: Bearer ...`; при пустом `XUI_API_TOKEN` используется cookie-сессия).
 - `XUI_USERNAME` — имя пользователя администратора внешнего контура цифрового доступа.
 - `XUI_PASSWORD` — пароль администратора внешнего контура цифрового доступа.
 - `XUI_INBOUND_IDS` — ID направлений через запятую, в которые бот будет добавлять записи цифрового доступа.
+- `XUI_DEFAULT_TRAFFIC_GB` и `XUI_DEFAULT_LIMIT_IP` — значения по умолчанию для новых клиентов в legacy single-node режиме.
+- `XUI_DEFAULT_MAX_ACTIVE_SUBSCRIPTIONS` — лимит active-подписок для виртуальной legacy-ноды `default`; укажите положительное число или оставьте unset/`null`, чтобы не ограничивать ёмкость.
+- `NODE_RESERVATION_TTL_MINUTES` — время жизни временной резервации ноды в минутах.
 
 ## Multi-node режим
 
-По умолчанию бот работает в legacy single-node режиме: используются обычные переменные `XUI_BASE_URL`, `XUI_PUBLIC_HOST`, `XUI_SUB_BASE_URL`, `XUI_API_TOKEN`, `XUI_AUTH_MODE`, `XUI_USERNAME`, `XUI_PASSWORD`, `XUI_INBOUND_IDS`, `XUI_DEFAULT_TRAFFIC_GB` и `XUI_DEFAULT_LIMIT_IP`. Этот режим подходит для одной 3x-ui-ноды и сохраняет обратную совместимость с существующими `.env`.
+По умолчанию бот работает в legacy single-node режиме: используются обычные переменные `XUI_BASE_URL`, `XUI_PUBLIC_HOST`, `XUI_SUB_BASE_URL`, `XUI_API_TOKEN`, `XUI_AUTH_MODE`, `XUI_USERNAME`, `XUI_PASSWORD`, `XUI_INBOUND_IDS`, `XUI_DEFAULT_TRAFFIC_GB`, `XUI_DEFAULT_LIMIT_IP` и `XUI_DEFAULT_MAX_ACTIVE_SUBSCRIPTIONS`. Этот режим подходит для одной 3x-ui-ноды и сохраняет обратную совместимость с существующими `.env`; внутри приложения она отображается как виртуальная нода с ключом `default`.
 
 Для нескольких нод задайте `XUI_NODES_JSON` — JSON-массив объектов нод. Если переменная заполнена, конфигурация нод берётся из неё, а legacy `XUI_*` переменные остаются запасным single-node способом конфигурации. Пример компактного значения:
 
 ```env
-XUI_NODES_JSON=[{"key":"main","name":"Primary node","enabled":true,"base_url":"https://node-1.example.com:31293/webPath","public_host":"node-1.example.com","sub_base_url":"https://node-1.example.com/sub/","api_token":"","auth_mode":"session_cookie","username":"admin","password":"change-me","inbound_ids":[1,2,3],"default_traffic_gb":0,"default_limit_ip":1},{"key":"backup","name":"Backup node","enabled":false,"base_url":"https://node-2.example.com:31293/webPath","public_host":"node-2.example.com","sub_base_url":"https://node-2.example.com/sub/","api_token":"","auth_mode":"session_cookie","username":"admin","password":"change-me","inbound_ids":[1]}]
+XUI_NODES_JSON=[{"key":"main","name":"Primary node","enabled":true,"max_active_subscriptions":50,"weight":1,"base_url":"https://node-1.example.com:31293/webPath","public_host":"node-1.example.com","sub_base_url":"https://node-1.example.com/sub/","api_token":"","auth_mode":"session_cookie","username":"admin","password":"change-me","inbound_ids":[1,2,3],"default_traffic_gb":0,"default_limit_ip":1},{"key":"backup","name":"Backup node","enabled":false,"max_active_subscriptions":25,"weight":1,"base_url":"https://node-2.example.com:31293/webPath","public_host":"node-2.example.com","sub_base_url":"https://node-2.example.com/sub/","api_token":"","auth_mode":"session_cookie","username":"admin","password":"change-me","inbound_ids":[1]}]
 ```
 
 Основные правила работы multi-node режима:
 
+- Объект ноды принимает реально парсимые поля `key`, `name`, `enabled`, `max_active_subscriptions`, `weight`, `base_url`/`xui_base_url`, `public_host`/`xui_public_host`, `sub_base_url`/`xui_sub_base_url`, `api_token`/`xui_api_token`, `auth_mode`/`xui_auth_mode`, `username`/`xui_username`, `password`/`xui_password`, `inbound_ids`/`xui_inbound_ids`, `default_traffic_gb` и `default_limit_ip`.
 - `key` должен быть стабильным уникальным идентификатором ноды. Он сохраняется в подписке как `node_key`, поэтому не переименовывайте ключ у ноды с активными пользователями.
-- Для новой выдачи бот выбирает только `enabled=true` ноды и берёт enabled-ноду с минимальным числом active-подписок. Это распределяет новых пользователей по наименее загруженным доступным нодам.
+- Для новой выдачи бот выбирает только `enabled=true` ноды, пропускает ноды с исчерпанным `max_active_subscriptions` и берёт enabled-ноду с минимальным числом active-подписок. Это распределяет новых пользователей по наименее загруженным доступным нодам.
 - После выдачи `node_key` сохраняется вместе с подпиской. Все продления и обновления срока выполняются на той же ноде, чтобы у пользователя не менялась действующая ссылка для защищённого соединения.
 - `enabled=false` исключает ноду из выбора для новых подписок, но не удаляет и не отключает существующие подписки на этой ноде. Продления действующих подписок продолжают обращаться к сохранённой ноде по её `node_key`, если нода всё ещё присутствует в конфигурации.
 - Безопасное удаление ноды: сначала установите для неё `enabled=false`, дождитесь окончания или переноса всех active-подписок с этим `node_key`, проверьте отсутствие активных пользователей на ноде через админ-команды, и только после этого удаляйте объект ноды из `XUI_NODES_JSON`.

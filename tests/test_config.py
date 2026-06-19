@@ -93,6 +93,7 @@ def test_xui_nodes_falls_back_to_legacy_default_node() -> None:
         xui_username="legacy-user",
         xui_password=SecretStr("legacy-password"),
         xui_inbound_ids="3,4",
+        xui_default_max_active_subscriptions=75,
     )
 
     node = settings.get_xui_node("default")
@@ -106,6 +107,30 @@ def test_xui_nodes_falls_back_to_legacy_default_node() -> None:
     assert node.xui_username == "legacy-user"
     assert node.xui_password.get_secret_value() == "legacy-password"
     assert node.xui_inbound_ids == [3, 4]
+    assert node.max_active_subscriptions == 75
+
+
+def test_legacy_default_node_capacity_can_be_unlimited() -> None:
+    settings = Settings(
+        **_settings_kwargs(),
+        xui_username="legacy-user",
+        xui_password=SecretStr("legacy-password"),
+        xui_inbound_ids=[1],
+        xui_default_max_active_subscriptions="null",
+    )
+
+    assert settings.get_xui_node("default").max_active_subscriptions is None
+
+
+def test_legacy_default_node_capacity_must_be_positive() -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            **_settings_kwargs(),
+            xui_username="legacy-user",
+            xui_password=SecretStr("legacy-password"),
+            xui_inbound_ids=[1],
+            xui_default_max_active_subscriptions=0,
+        )
 
 
 @pytest.mark.parametrize(
