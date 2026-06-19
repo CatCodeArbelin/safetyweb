@@ -3,10 +3,11 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from html import escape
+from secrets import token_hex
 from typing import TYPE_CHECKING, Any
 
 from app.config import Settings
-from app.db.models import Payment, PaymentStatus, ReferralReward
+from app.db.models import Payment, PaymentStatus, ReferralReward, Subscription
 from app.db.repositories.payments import PaymentRepository
 from app.db.repositories.subscriptions import SubscriptionRepository
 from app.db.session import async_session_maker
@@ -46,6 +47,7 @@ class PaymentFinalizationService:
         source: str,
     ) -> PaymentFinalizationResult:
         """Provision access and rewards for a paid payment idempotently."""
+        provision_result: ProvisionResult | None
         async with async_session_maker() as session:
             payment_repository = PaymentRepository(session)
             payment = await payment_repository.get_by_provider_payment_id_for_update(
@@ -59,9 +61,19 @@ class PaymentFinalizationService:
                 )
                 raise ValueError(msg)
 
+            provider_data = dict(payment.provider_data or {})
+
             if payment.subscription_id is not None:
+                subscription = await session.get(Subscription, payment.subscription_id)
+                provision_result = None
+                if subscription is not None:
+                    provision_result = VpnService.provision_result_from_subscription(subscription)
                 await session.commit()
-                await self._notify_user_once(payment, None, "already_finalized")
+                await self._notify_user_once(
+                    payment,
+                    provision_result,
+                    provider_data.get("finalization_result", "already_finalized"),
+                )
                 return PaymentFinalizationResult(
                     payment=payment,
                     provision_result=None,
@@ -82,7 +94,7 @@ class PaymentFinalizationService:
                 payment.paid_at = payment.paid_at or datetime.now(tz=UTC)
 
             months = payment.tariff_months or self._extract_months_from_provider_data(
-                payment.provider_data,
+                provider_data,
                 payment.id,
                 provider_payment_id,
             )
@@ -91,12 +103,23 @@ class PaymentFinalizationService:
                 raise ValueError(msg)
 
             user = payment.user
-            subscription = await SubscriptionRepository(session).get_by_last_payment_id(
-                user.telegram_id,
-                provider_payment_id,
-            )
-            if subscription is not None:
+            subscription_repository = SubscriptionRepository(session)
+            if provider_data.get("finalization_started_at"):
+                subscription = await subscription_repository.get_by_last_payment_id(
+                    user.telegram_id,
+                    provider_payment_id,
+                )
+                if subscription is None:
+                    msg = "Payment finalization is already in progress"
+                    raise RuntimeError(msg)
+
                 payment.subscription_id = subscription.id
+                finished_data = {
+                    **provider_data,
+                    "finalization_finished_at": datetime.now(tz=UTC).isoformat(),
+                    "finalization_result": "attached_existing",
+                }
+                payment.provider_data = finished_data
                 await session.flush()
                 await session.commit()
                 provision_result = VpnService.provision_result_from_subscription(subscription)
@@ -109,10 +132,42 @@ class PaymentFinalizationService:
                     status="attached_existing",
                 )
 
+            provider_data = {
+                **provider_data,
+                "finalization_started_at": datetime.now(tz=UTC).isoformat(),
+                "finalization_source": source,
+                "finalization_lock_id": token_hex(8),
+            }
+            payment.provider_data = provider_data
             await session.commit()
 
         user_id = payment.user.telegram_id
-        provision_result = await self._provision(provider_payment_id, user_id, months)
+        try:
+            provision_result = await self._provision(provider_payment_id, user_id, months)
+        except Exception as error:
+            sanitized_error = self._sanitize_finalization_error(error)
+            async with async_session_maker() as session:
+                payment_repository = PaymentRepository(session)
+                payment = await payment_repository.get_by_provider_payment_id_for_update(
+                    provider,
+                    provider_payment_id,
+                )
+                if payment is not None:
+                    provider_data = dict(payment.provider_data or {})
+                    payment.provider_data = {
+                        **provider_data,
+                        "finalization_error": sanitized_error,
+                        "finalization_failed_at": datetime.now(tz=UTC).isoformat(),
+                    }
+                    await session.commit()
+            await self._notify_admins(
+                "Ошибка финализации платежа\n"
+                f"Provider: <code>{escape(provider)}</code>\n"
+                f"Source: <code>{escape(source)}</code>\n"
+                f"User: <code>{user_id}</code>\n"
+                f"Error: <code>{escape(sanitized_error)}</code>"
+            )
+            raise
 
         async with async_session_maker() as session:
             payment_repository = PaymentRepository(session)
@@ -128,7 +183,13 @@ class PaymentFinalizationService:
                 raise ValueError(msg)
             if payment.subscription_id is None:
                 payment.subscription_id = provision_result.subscription_id
-                await session.flush()
+            provider_data = dict(payment.provider_data or {})
+            payment.provider_data = {
+                **provider_data,
+                "finalization_finished_at": datetime.now(tz=UTC).isoformat(),
+                "finalization_result": provision_result.action,
+            }
+            await session.flush()
             await session.commit()
 
         benefit_granted = False
@@ -162,6 +223,14 @@ class PaymentFinalizationService:
             )
         finally:
             await vpn_service.close()
+
+    @staticmethod
+    def _sanitize_finalization_error(error: Exception) -> str:
+        """Return a compact provisioning error safe for provider_data/admin alerts."""
+        message = " ".join(str(error).split())
+        if not message:
+            message = error.__class__.__name__
+        return message[:500]
 
     @classmethod
     def _extract_months_from_provider_data(
