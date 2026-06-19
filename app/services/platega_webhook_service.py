@@ -292,11 +292,13 @@ class PlategaWebhookService:
         if payment is None:
             return None
 
+        sanitized_transaction = self._sanitize_transaction(transaction)
         payment.provider = PLATEGA_PROVIDER_NAME
         payment.provider_payment_id = provider_payment_id
         payment.provider_data = {
             **(payment.provider_data or {}),
-            "last_status_response": self._sanitize_transaction(transaction),
+            "recovered_provider_payment_id": provider_payment_id,
+            "last_status_response": sanitized_transaction,
         }
         if payment.tariff_months is None:
             payment.tariff_months = self._extract_positive_int(payload, "months")
@@ -321,6 +323,9 @@ class PlategaWebhookService:
         if amount is None or currency is None:
             return None
 
+        sanitized_transaction = self._sanitize_transaction(transaction)
+        sanitized_payload = self._sanitize_transaction(payload)
+
         user = await UserRepository(repository.session).get_or_create(telegram_id)
         return await repository.create_payment(
             user_id=user.id,
@@ -332,7 +337,8 @@ class PlategaWebhookService:
             currency=currency,
             provider_data={
                 "recovered_from_webhook": True,
-                "last_status_response": self._sanitize_transaction(transaction),
+                "last_status_response": sanitized_transaction,
+                "recovery_payload": sanitized_payload,
             },
         )
 
