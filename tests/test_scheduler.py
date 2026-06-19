@@ -126,13 +126,19 @@ async def test_process_pending_payment_webhooks_loads_platega_events(monkeypatch
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
+        async def commit(self):
+            return None
+
     class FakeRepository:
         def __init__(self, session):
             self.session = session
 
-        async def get_unprocessed_webhook_events(self, *, provider):
+        async def get_retryable_webhook_events(self, *, provider, now):
             assert provider == scheduler_module.PLATEGA_PROVIDER_NAME
             return events
+
+        async def mark_webhook_attempt(self, event_id, attempted_at):
+            return SimpleNamespace(id=event_id, retry_count=1)
 
     class FakeService:
         def __init__(self, settings, bot):
@@ -296,3 +302,73 @@ async def test_reconcile_platega_payments_expires_only_after_provider_pending(mo
     ]
     assert payment.status == PaymentStatus.EXPIRED
     assert payment.status_reason == "expired_locally"
+
+
+class FakeExpiryXuiClient:
+    created_nodes: list[str] = []
+    closed_nodes: list[str] = []
+
+    def __init__(self, settings: Settings, node: object | None = None) -> None:
+        self.node = node
+        FakeExpiryXuiClient.created_nodes.append(node.key)
+
+    async def update_client(
+        self,
+        inbound_id: int,
+        client_id: str,
+        payload: dict[str, object],
+        *,
+        enable: bool,
+    ) -> None:
+        assert inbound_id == 2
+        assert client_id == "client-id"
+        assert payload["clients"][0]["enable"] is False
+        assert enable is False
+
+    async def close(self) -> None:
+        FakeExpiryXuiClient.closed_nodes.append(self.node.key)
+
+
+@pytest.mark.anyio
+async def test_deprovision_subscription_client_uses_subscription_node_and_closes_client(monkeypatch) -> None:
+    FakeExpiryXuiClient.created_nodes = []
+    FakeExpiryXuiClient.closed_nodes = []
+    monkeypatch.setattr(scheduler_module, "XuiClient", FakeExpiryXuiClient)
+    settings = make_settings(
+        xui_expired_client_policy="disable",
+        xui_nodes_json='''
+        [
+            {
+                "key": "node-a",
+                "xui_base_url": "https://node-a.example.test/",
+                "xui_username": "user-a",
+                "xui_password": "password-a",
+                "xui_inbound_ids": [1]
+            },
+            {
+                "key": "node-b",
+                "xui_base_url": "https://node-b.example.test/",
+                "xui_username": "user-b",
+                "xui_password": "password-b",
+                "xui_inbound_ids": [2]
+            }
+        ]
+        ''',
+    )
+    node_selector = scheduler_module.NodeSelectorService(settings=settings)
+    subscription = SimpleNamespace(
+        node_key="node-b",
+        inbound_id=2,
+        xui_client_id="client-id",
+        xui_email="client@example.test",
+        vpn_config={"client": {"flow": "xtls-rprx-vision"}},
+    )
+
+    await scheduler_module._deprovision_subscription_client(
+        subscription,
+        node_selector,
+        settings,
+    )
+
+    assert FakeExpiryXuiClient.created_nodes == ["node-b"]
+    assert FakeExpiryXuiClient.closed_nodes == ["node-b"]

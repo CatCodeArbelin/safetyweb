@@ -23,6 +23,7 @@ from app.db.repositories.payments import PaymentRepository
 from app.db.session import async_session_maker
 from app.services.payment_service import PLATEGA_PROVIDER_NAME
 from app.services.platega_client import PlategaClient
+from app.services.node_selector_service import NodeSelectorService
 from app.services.platega_webhook_service import PlategaWebhookService
 from app.services.xui_client import XuiClient
 
@@ -217,27 +218,28 @@ async def expire_subscriptions(bot: Bot, settings: Settings | None = None) -> No
     """Disable or delete expired active protected access clients and notify users once."""
     app_settings = settings or Settings()
     now = datetime.now(tz=UTC)
-    xui_client = XuiClient(settings=app_settings)
-    try:
-        async with async_session_maker() as session:
-            subscriptions = await _expired_active_subscriptions(session, now)
-            for subscription in subscriptions:
-                await _deprovision_client(subscription, xui_client, app_settings)
-                subscription.status = SubscriptionStatus.EXPIRED
-                subscription.disabled_at = now
-                await _create_notification_event(
-                    session,
-                    subscription=subscription,
-                    notification_type=SubscriptionNotificationType.EXPIRED,
-                )
-                await session.commit()
-                await _safe_send_message(
-                    bot,
-                    subscription.user.telegram_id,
-                    _expiration_text(subscription.expires_at),
-                )
-    finally:
-        await xui_client.close()
+    node_selector = NodeSelectorService(settings=app_settings)
+    async with async_session_maker() as session:
+        subscriptions = await _expired_active_subscriptions(session, now)
+        for subscription in subscriptions:
+            await _deprovision_subscription_client(
+                subscription,
+                node_selector,
+                app_settings,
+            )
+            subscription.status = SubscriptionStatus.EXPIRED
+            subscription.disabled_at = now
+            await _create_notification_event(
+                session,
+                subscription=subscription,
+                notification_type=SubscriptionNotificationType.EXPIRED,
+            )
+            await session.commit()
+            await _safe_send_message(
+                bot,
+                subscription.user.telegram_id,
+                _expiration_text(subscription.expires_at),
+            )
 
 
 async def send_expiration_reminders(bot: Bot) -> None:
@@ -301,6 +303,19 @@ async def _subscriptions_expiring_between(
         .order_by(Subscription.expires_at)
     )
     return list(result)
+
+
+async def _deprovision_subscription_client(
+    subscription: Subscription,
+    node_selector: NodeSelectorService,
+    settings: Settings,
+) -> None:
+    node = node_selector.get_node_for_subscription(subscription)
+    xui_client = XuiClient(settings=settings, node=node)
+    try:
+        await _deprovision_client(subscription, xui_client, settings)
+    finally:
+        await xui_client.close()
 
 
 async def _deprovision_client(
