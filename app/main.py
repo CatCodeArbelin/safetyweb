@@ -17,6 +17,8 @@ from aiogram.fsm.storage.redis import RedisStorage
 import uvicorn
 
 from aiogram.types import (
+    BotCommandScopeChat,
+    BotCommandScopeDefault,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -34,7 +36,9 @@ from app.bot_commands import (
     BTN_MY_SUBSCRIPTION,
     BTN_PROFILE,
     BTN_SUPPORT,
+    admin_telegram_bot_commands,
     render_admin_help_text,
+    user_telegram_bot_commands,
 )
 from app.config import Settings, XuiNodeConfig
 from app.http_app import create_app
@@ -1844,6 +1848,20 @@ async def support(message: Message, settings: Settings) -> None:
     await message.answer(support_contact_text(settings))
 
 
+async def setup_bot_command_menu(bot: Bot, settings: Settings) -> None:
+    """Configure Telegram command menus for users and administrators."""
+    await bot.set_my_commands(
+        user_telegram_bot_commands(),
+        scope=BotCommandScopeDefault(),
+    )
+    admin_commands = admin_telegram_bot_commands()
+    for admin_id in settings.admin_ids:
+        await bot.set_my_commands(
+            admin_commands,
+            scope=BotCommandScopeChat(chat_id=admin_id),
+        )
+
+
 async def run_http_server(settings: Settings, bot: Bot) -> None:
     """Run the Platega webhook HTTP server until cancelled."""
     if settings.payment_provider != "platega" or settings.test_mode:
@@ -1911,6 +1929,7 @@ async def main() -> None:
     )
     dispatcher = Dispatcher(storage=storage)
     dispatcher.include_router(router)
+    await setup_bot_command_menu(bot, settings)
 
     services: list[Awaitable[Any]] = [
         dispatcher.start_polling(bot, settings=settings),
