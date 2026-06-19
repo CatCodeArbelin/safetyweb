@@ -56,6 +56,8 @@ class PaymentRepository:
         provider_data: dict[str, Any] | None = None,
         status_reason: str | None = None,
         paid_at: datetime | None = None,
+        reserved_node_key: str | None = None,
+        node_reservation_expires_at: datetime | None = None,
     ) -> Payment:
         """Create and flush a payment."""
         payment = Payment(
@@ -76,6 +78,8 @@ class PaymentRepository:
             ),
             status_reason=status_reason,
             paid_at=paid_at,
+            reserved_node_key=reserved_node_key,
+            node_reservation_expires_at=node_reservation_expires_at,
         )
         self.session.add(payment)
         await self.session.flush()

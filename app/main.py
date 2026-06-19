@@ -60,7 +60,11 @@ from app.services.payment_service import (
 from app.services.platega_client import PlategaClient
 from app.services.platega_webhook_service import PlategaWebhookService
 from app.services.referral_service import ReferralService
-from app.services.node_selector_service import NodeSelectorService
+from app.services.node_selector_service import (
+    NoAvailableNodeError,
+    NodeCapacityInfo,
+    NodeSelectorService,
+)
 from app.services.stats_service import AdminStats, StatsService
 from app.services.subscription_service import SubscriptionService
 from app.services.vpn_service import (
@@ -233,6 +237,28 @@ def docs_keyboard(settings: Settings) -> InlineKeyboardMarkup:
         ]
     )
 
+
+def format_capacity_snapshot(snapshot: list[NodeCapacityInfo]) -> str:
+    """Format an X-UI node capacity snapshot for admin alerts."""
+    if not snapshot:
+        return "Ноды: <code>не настроены</code>"
+
+    lines = ["Снимок capacity нод:"]
+    for item in snapshot:
+        limit = (
+            "∞"
+            if item.max_active_subscriptions is None
+            else str(item.max_active_subscriptions)
+        )
+        status = "enabled" if item.enabled else "disabled"
+        capacity = "available" if item.has_capacity else "full"
+        title = item.name or item.key
+        lines.append(
+            f"- <code>{escape(item.key)}</code> ({escape(title)}): "
+            f"{status}, {capacity}, active=<code>{item.active_count}</code>, "
+            f"reserved=<code>{item.reserved_count}</code>, limit=<code>{limit}</code>"
+        )
+    return "\n".join(lines)
 
 def format_provision_expires(result: ProvisionResult) -> str:
     """Format provision expiry timestamp for bot messages."""
@@ -1552,6 +1578,30 @@ async def create_payment_request(
             str(stored_method_key) if stored_method_key is not None else None
         )
 
+    try:
+        async with async_session_maker() as session:
+            async with session.begin():
+                node_selector = NodeSelectorService(settings=settings, session=session)
+                await node_selector.select_node_for_new_subscription()
+    except NoAvailableNodeError:
+        await state.clear()
+        snapshot = await NodeSelectorService(settings=settings).get_capacity_snapshot()
+        await notify_admins(
+            bot,
+            settings,
+            "⚠️ Нет свободной capacity для новой оплаты\n"
+            f"Telegram ID: <code>{user.id}</code>\n"
+            f"Тариф: <code>{months}</code>\n"
+            f"{format_capacity_snapshot(snapshot)}",
+        )
+        await callback.message.answer(
+            "Сейчас все серверы временно заполнены. "
+            "Пожалуйста, напишите в поддержку или попробуйте позже.",
+            reply_markup=main_menu_keyboard(),
+        )
+        await callback.answer("Серверы временно заполнены", show_alert=True)
+        return
+
     payment_service = PaymentService(settings=settings)
     try:
         result: PaymentCreateResult = await payment_service.create_payment(
@@ -1561,6 +1611,24 @@ async def create_payment_request(
             currency=PAYMENT_CURRENCY,
             payment_method_key=payment_method_key,
         )
+    except NoAvailableNodeError:
+        await state.clear()
+        snapshot = await NodeSelectorService(settings=settings).get_capacity_snapshot()
+        await notify_admins(
+            bot,
+            settings,
+            "⚠️ Capacity закончилась при создании payment\n"
+            f"Telegram ID: <code>{user.id}</code>\n"
+            f"Тариф: <code>{months}</code>\n"
+            f"{format_capacity_snapshot(snapshot)}",
+        )
+        await callback.message.answer(
+            "Сейчас все серверы временно заполнены. "
+            "Пожалуйста, напишите в поддержку или попробуйте позже.",
+            reply_markup=main_menu_keyboard(),
+        )
+        await callback.answer("Серверы временно заполнены", show_alert=True)
+        return
     except KeyError:
         await notify_admins(
             bot,

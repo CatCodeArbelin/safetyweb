@@ -16,6 +16,7 @@ from app.config import Settings
 from app.db.models import Payment, PaymentStatus, User
 from app.db.repositories.payments import PaymentRepository
 from app.db.session import async_session_maker
+from app.services.node_selector_service import NodeSelectorService
 from app.services.platega_client import PlategaClient, build_platega_payload
 from app.utils.sanitize import sanitize_dict, sanitize_exception, sensitive_values_from
 
@@ -114,8 +115,13 @@ class PaymentProvider(ABC):
 class ManualPaymentProvider(PaymentProvider):
     """Manual payment provider for MVP admin-confirmed payments."""
 
-    def __init__(self, session: AsyncSession | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession | None = None,
+        settings: Settings | None = None,
+    ) -> None:
         self.session = session
+        self.settings = settings or Settings()
 
     async def create_payment(
         self,
@@ -127,22 +133,34 @@ class ManualPaymentProvider(PaymentProvider):
     ) -> PaymentCreateResult:
         """Create a pending manual payment for a Telegram user."""
         if self.session is not None:
+            node = await NodeSelectorService(
+                settings=self.settings, session=self.session
+            ).select_node_for_new_subscription()
             payment = await self._create_payment(
                 self.session,
                 user_id=user_id,
                 tariff_id=tariff_id,
                 amount=amount,
                 currency=currency,
+                reserved_node_key=node.key,
+                node_reservation_expires_at=datetime.now(tz=UTC)
+                + timedelta(minutes=self.settings.node_reservation_ttl_minutes),
             )
             return self._create_result(payment)
 
         async with async_session_maker() as session:
+            node = await NodeSelectorService(
+                settings=self.settings, session=session
+            ).select_node_for_new_subscription()
             payment = await self._create_payment(
                 session,
                 user_id=user_id,
                 tariff_id=tariff_id,
                 amount=amount,
                 currency=currency,
+                reserved_node_key=node.key,
+                node_reservation_expires_at=datetime.now(tz=UTC)
+                + timedelta(minutes=self.settings.node_reservation_ttl_minutes),
             )
             await session.commit()
             return self._create_result(payment)
@@ -191,6 +209,8 @@ class ManualPaymentProvider(PaymentProvider):
         tariff_id: int,
         amount: Decimal | int | str,
         currency: str,
+        reserved_node_key: str,
+        node_reservation_expires_at: datetime,
     ) -> Payment:
         user = await ManualPaymentProvider._get_or_create_user(session, user_id)
         payment = Payment(
@@ -200,6 +220,8 @@ class ManualPaymentProvider(PaymentProvider):
             amount=Decimal(str(amount)),
             currency=currency.upper(),
             description=f"Manual payment for tariff {tariff_id}",
+            reserved_node_key=reserved_node_key,
+            node_reservation_expires_at=node_reservation_expires_at,
         )
         session.add(payment)
         await session.flush()
@@ -279,6 +301,12 @@ class PlategaPaymentProvider(PaymentProvider):
 
         async with async_session_maker() as session:
             user = await ManualPaymentProvider._get_or_create_user(session, user_id)
+            node = await NodeSelectorService(
+                settings=self.settings, session=session
+            ).select_node_for_new_subscription()
+            reservation_expires_at = datetime.now(tz=UTC) + timedelta(
+                minutes=self.settings.node_reservation_ttl_minutes
+            )
             description = f"Payment for tariff {tariff_id}"
             repository = PaymentRepository(session)
             payment = await repository.create_payment(
@@ -289,6 +317,8 @@ class PlategaPaymentProvider(PaymentProvider):
                 amount=amount,
                 currency=currency,
                 description=description,
+                reserved_node_key=node.key,
+                node_reservation_expires_at=reservation_expires_at,
             )
             await session.commit()
 
@@ -503,7 +533,7 @@ def create_payment_provider(settings: Settings) -> PaymentProvider:
     """Build the configured payment provider."""
     provider_name = settings.payment_provider.lower()
     if provider_name == MANUAL_PROVIDER_NAME:
-        return ManualPaymentProvider()
+        return ManualPaymentProvider(settings=settings)
     if provider_name == PLATEGA_PROVIDER_NAME:
         return PlategaPaymentProvider(settings=settings)
     msg = "PAYMENT_PROVIDER must be either 'manual' or 'platega'"
