@@ -8,6 +8,8 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.utils.sanitize import sanitize_dict, sanitize_headers
+
 from app.db.models import (
     Payment,
     PaymentStatus,
@@ -69,7 +71,9 @@ class PaymentRepository:
             provider_redirect_url=provider_redirect_url,
             provider_expires_at=provider_expires_at,
             provider_payment_method=provider_payment_method,
-            provider_data=provider_data,
+            provider_data=(
+                sanitize_dict(provider_data) if provider_data is not None else None
+            ),
             status_reason=status_reason,
             paid_at=paid_at,
         )
@@ -169,12 +173,14 @@ class PaymentRepository:
         if status_reason is not None:
             payment.status_reason = status_reason
         if provider_data is not None:
-            payment.provider_data = provider_data
+            payment.provider_data = sanitize_dict(provider_data)
         if provider_data_patch is not None:
-            payment.provider_data = {
-                **(payment.provider_data or {}),
-                **provider_data_patch,
-            }
+            payment.provider_data = sanitize_dict(
+                {
+                    **(payment.provider_data or {}),
+                    **provider_data_patch,
+                }
+            )
         await self.session.flush()
         return payment
 
@@ -240,9 +246,9 @@ class PaymentRepository:
             payment_id=payment_id,
             event_status=event_status,
             payload_hash=payload_hash,
-            headers=headers,
+            headers=sanitize_headers(headers),
             raw_body=raw_body,
-            payload=payload,
+            payload=sanitize_dict(payload) if payload is not None else None,
         )
         self.session.add(event)
         await self.session.flush()

@@ -15,6 +15,7 @@ from app.services.benefit_service import BenefitService
 from app.services.payment_service import MANUAL_PROVIDER_NAME
 from app.services.referral_service import ReferralService
 from app.services.vpn_service import ProvisionResult, VpnService
+from app.utils.sanitize import sanitize_exception
 
 if TYPE_CHECKING:
     from aiogram import Bot
@@ -231,10 +232,7 @@ class PaymentFinalizationService:
     @staticmethod
     def _sanitize_finalization_error(error: Exception) -> str:
         """Return a compact provisioning error safe for provider_data/admin alerts."""
-        message = " ".join(str(error).split())
-        if not message:
-            message = error.__class__.__name__
-        return message[:500]
+        return sanitize_exception(error, limit=500)
 
     @classmethod
     def _extract_months_from_provider_data(

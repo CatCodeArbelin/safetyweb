@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from app.config import Settings
+from app.utils.sanitize import sanitize_string, sensitive_values_from
 
 
 class PlategaError(RuntimeError):
@@ -128,18 +129,13 @@ class PlategaClient:
         except UnicodeDecodeError:
             text = repr(response.content)
 
-        secret_values = []
-        if self.settings.platega_api_key is not None:
-            secret_values.append(self.settings.platega_api_key.get_secret_value())
-        if self.settings.platega_callback_secret is not None:
-            secret_values.append(
-                self.settings.platega_callback_secret.get_secret_value(),
-            )
-
-        for secret_value in secret_values:
-            if secret_value:
-                text = text.replace(secret_value, "***")
-        return text[:2000]
+        return sanitize_string(
+            text,
+            secrets=sensitive_values_from(
+                self.settings.platega_api_key,
+                self.settings.platega_callback_secret,
+            ),
+        )[:2000]
 
 
 def build_platega_payload(

@@ -2,7 +2,6 @@
 
 import json
 import logging
-import re
 from typing import Any
 from urllib.parse import quote
 
@@ -10,6 +9,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 
 from app.config import Settings, XuiNodeConfig
+from app.utils.sanitize import sanitize_string, sanitize_value
 
 
 logger = logging.getLogger(__name__)
@@ -416,44 +416,6 @@ class XuiClient:
     @staticmethod
     def _redact_sensitive(value: Any) -> Any:
         """Redact credentials, cookies, and tokens from diagnostic values."""
-        if isinstance(value, dict):
-            redacted: dict[Any, Any] = {}
-            for key, item in value.items():
-                key_text = str(key).lower()
-                if any(
-                    marker in key_text
-                    for marker in (
-                        "username",
-                        "password",
-                        "cookie",
-                        "token",
-                        "authorization",
-                        "secret",
-                        "api_key",
-                    )
-                ):
-                    redacted[key] = "***"
-                else:
-                    redacted[key] = XuiClient._redact_sensitive(item)
-            return redacted
-        if isinstance(value, list):
-            return [XuiClient._redact_sensitive(item) for item in value]
-        if not isinstance(value, str):
-            return value
-
-        redacted_text = re.sub(
-            r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+",
-            r"\1***",
-            value,
-        )
-        redacted_text = re.sub(
-            r'(?i)("?(?:username|password|cookie|token|authorization|secret|api[_-]?key)"?\s*[:=]\s*)"?[^",&;\s}]+"?',
-            r"\1***",
-            redacted_text,
-        )
-        redacted_text = re.sub(
-            r"(?i)(bearer\s+)[^\s,;]+",
-            r"\1***",
-            redacted_text,
-        )
-        return redacted_text
+        if isinstance(value, str):
+            return sanitize_string(value)
+        return sanitize_value(value)

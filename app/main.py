@@ -70,6 +70,7 @@ from app.services.vpn_service import (
 )
 from app.services.xui_client import XuiClient, XuiError
 from app.tasks.scheduler import create_scheduler
+from app.utils.sanitize import sanitize_exception
 
 TARIFFS = {
     1: "1 месяц",
@@ -289,7 +290,8 @@ def format_access_error_alert(
         lines.append(f"Месяцев: <code>{months}</code>")
     if provider_payment_id is not None:
         lines.append(f"Платёж провайдера: <code>{escape(provider_payment_id)}</code>")
-    lines.append(f"Ошибка: <code>{escape(str(error))}</code>")
+    sanitized_error = sanitize_exception(error, limit=500)
+    lines.append(f"Ошибка: <code>{escape(sanitized_error)}</code>")
     return "\n".join(lines)
 
 
