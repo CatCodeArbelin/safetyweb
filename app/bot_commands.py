@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
+from aiogram.types import BotCommand
+
 
 class BotCommandCategory(StrEnum):
     """Command categories shown in administrator help."""
@@ -174,6 +176,36 @@ BOT_COMMAND_REGISTRY: tuple[BotCommandSpec, ...] = (
         BotCommandCategory.USER_BUTTON, BTN_DOCUMENTS, "документы из профиля."
     ),
 )
+
+
+def _slash_command_name(command: str) -> str:
+    """Return Telegram BotCommand name without slash or arguments."""
+    return command.split(maxsplit=1)[0].removeprefix("/")
+
+
+def telegram_bot_commands(*categories: BotCommandCategory) -> list[BotCommand]:
+    """Build Telegram command menu entries for the requested slash categories."""
+    return [
+        BotCommand(
+            command=_slash_command_name(entry.command),
+            description=entry.description.rstrip("."),
+        )
+        for entry in BOT_COMMAND_REGISTRY
+        if entry.category in categories
+    ]
+
+
+def user_telegram_bot_commands() -> list[BotCommand]:
+    """Build the command menu visible to ordinary users."""
+    return telegram_bot_commands(BotCommandCategory.USER_SLASH)
+
+
+def admin_telegram_bot_commands() -> list[BotCommand]:
+    """Build the command menu visible to configured administrators."""
+    return telegram_bot_commands(
+        BotCommandCategory.USER_SLASH,
+        BotCommandCategory.ADMIN_SLASH,
+    )
 
 
 ADMIN_HELP_CATEGORY_ORDER: tuple[BotCommandCategory, ...] = (
