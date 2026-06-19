@@ -2,6 +2,8 @@
 
 import json
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from secrets import token_hex
@@ -12,13 +14,14 @@ from uuid import uuid4
 from dateutil.relativedelta import relativedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import Settings
+from app.config import Settings, XuiNodeConfig
 from app.db.repositories import (
     ActiveSubscriptionAlreadyExistsError,
     SubscriptionRepository,
     UserRepository,
 )
 from app.db.session import async_session_maker
+from app.services.node_selector_service import NodeSelectorService
 from app.services.xui_client import XuiClient
 
 
@@ -51,14 +54,43 @@ class VpnService:
         session: AsyncSession | None = None,
     ) -> None:
         self.settings = settings or Settings()
-        self.xui_client = xui_client or XuiClient(settings=self.settings)
+        self.xui_client = xui_client
         self.session = session
-        self._owns_xui_client = xui_client is None
+        self._owns_xui_client = False
 
     async def close(self) -> None:
         """Close resources owned by the service."""
-        if self._owns_xui_client:
+        if self._owns_xui_client and self.xui_client is not None:
             await self.xui_client.close()
+
+    @asynccontextmanager
+    async def _xui_client_for_node(
+        self,
+        node: XuiNodeConfig,
+    ) -> AsyncIterator[XuiClient]:
+        """Yield an X-UI client configured for the selected node."""
+        if self.xui_client is not None:
+            yield self.xui_client
+            return
+
+        client = XuiClient(settings=self.settings, node=node)
+        try:
+            yield client
+        finally:
+            await client.close()
+
+    def _node_selector(self, session: AsyncSession) -> NodeSelectorService:
+        """Return a node selector bound to the current service settings/session."""
+        return NodeSelectorService(settings=self.settings, session=session)
+
+    @staticmethod
+    def _node_vpn_config(node: XuiNodeConfig) -> dict[str, Any]:
+        """Return non-secret node metadata persisted with subscription diagnostics."""
+        return {
+            "node_key": node.key,
+            "node_label": node.key,
+            "node_public_host": node.xui_public_host,
+        }
 
     async def create_client(self, telegram_id: int, months: int) -> str:
         """Create or extend a paid subscription and return its connection link."""
@@ -196,16 +228,19 @@ class VpnService:
         client_payload["expiryTime"] = expiry_ms
         client_payload["enable"] = True
 
-        await self.xui_client.update_client(
-            subscription.inbound_id,
-            subscription.xui_client_id,
-            {"clients": [client_payload]},
-            enable=True,
-        )
+        node = self._node_selector(session).get_node_for_subscription(subscription)
+        async with self._xui_client_for_node(node) as xui_client:
+            await xui_client.update_client(
+                subscription.inbound_id,
+                subscription.xui_client_id,
+                {"clients": [client_payload]},
+                enable=True,
+            )
 
         vpn_config["client"] = client_payload
         vpn_config["provisioned_client"] = client_payload
         vpn_config["expires_at"] = expires_at.isoformat()
+        vpn_config.update(self._node_vpn_config(node))
         vpn_config.setdefault("extension_reasons", []).append(
             {"reason": reason, "days": days, "created_at": datetime.now(UTC).isoformat()}
         )
@@ -257,13 +292,12 @@ class VpnService:
             "enable": True,
         }
 
-        inbound_ids = self.settings.xui_inbound_ids
-        if not inbound_ids:
-            msg = "XUI_INBOUND_IDS must contain at least one inbound id"
-            raise ValueError(msg)
+        node = await self._node_selector(session).select_node_for_new_subscription()
+        inbound_ids = node.xui_inbound_ids
         primary_inbound_id = inbound_ids[0]
 
-        xui_response = await self.xui_client.add_client(client_payload, inbound_ids)
+        async with self._xui_client_for_node(node) as xui_client:
+            xui_response = await xui_client.add_client(client_payload, inbound_ids)
 
         provisioned_client = client_payload
         provisioned_client_id = client_id
@@ -274,13 +308,14 @@ class VpnService:
         stream_settings: dict[str, Any] = {}
         diagnostic_subscription_link = self._extract_subscription_link(xui_response)
 
-        if self.settings.xui_sub_base_url:
+        if node.xui_sub_base_url:
             connection_link = self._build_subscription_url(
-                self.settings.xui_sub_base_url,
+                node.xui_sub_base_url,
                 sub_id,
             )
         else:
-            inbound_response = await self.xui_client.get_inbound(primary_inbound_id)
+            async with self._xui_client_for_node(node) as xui_client:
+                inbound_response = await xui_client.get_inbound(primary_inbound_id)
             provisioned_client = self._find_inbound_client(inbound_response, email)
             provisioned_client_id = self._extract_client_secret(provisioned_client, email)
             inbound = self._extract_inbound_object(inbound_response)
@@ -296,7 +331,7 @@ class VpnService:
                 email=email,
                 inbound=inbound,
                 protocol=protocol,
-                app_settings=self.settings,
+                public_host=node.xui_public_host,
                 stream_settings=stream_settings,
             )
 
@@ -307,8 +342,11 @@ class VpnService:
             inbound_id=primary_inbound_id,
             expires_at=expires_at,
             traffic_limit_gb=self.settings.xui_default_traffic_gb,
+            node_key=node.key,
+            node_label=node.key,
             vpn_config={
                 "email": email,
+                **self._node_vpn_config(node),
                 "access_type": "trial",
                 "trial_hours": hours,
                 "trial_created_at": now.isoformat(),
@@ -373,16 +411,15 @@ class VpnService:
             "enable": True,
         }
 
-        inbound_ids = self.settings.xui_inbound_ids
-        if not inbound_ids:
-            msg = "XUI_INBOUND_IDS must contain at least one inbound id"
-            raise ValueError(msg)
+        node = await self._node_selector(session).select_node_for_new_subscription()
+        inbound_ids = node.xui_inbound_ids
         primary_inbound_id = inbound_ids[0]
 
-        xui_response = await self.xui_client.add_client(
-            client_payload,
-            inbound_ids,
-        )
+        async with self._xui_client_for_node(node) as xui_client:
+            xui_response = await xui_client.add_client(
+                client_payload,
+                inbound_ids,
+            )
 
         provisioned_client = client_payload
         provisioned_client_id = client_id
@@ -393,13 +430,14 @@ class VpnService:
         stream_settings: dict[str, Any] = {}
         diagnostic_subscription_link = self._extract_subscription_link(xui_response)
 
-        if self.settings.xui_sub_base_url:
+        if node.xui_sub_base_url:
             connection_link = self._build_subscription_url(
-                self.settings.xui_sub_base_url,
+                node.xui_sub_base_url,
                 sub_id,
             )
         else:
-            inbound_response = await self.xui_client.get_inbound(primary_inbound_id)
+            async with self._xui_client_for_node(node) as xui_client:
+                inbound_response = await xui_client.get_inbound(primary_inbound_id)
             provisioned_client = self._find_inbound_client(inbound_response, email)
             provisioned_client_id = self._extract_client_secret(
                 provisioned_client, email
@@ -417,14 +455,14 @@ class VpnService:
                 email=email,
                 inbound=inbound,
                 protocol=protocol,
-                app_settings=self.settings,
+                public_host=node.xui_public_host,
                 stream_settings=stream_settings,
             )
 
         logger.debug(
             "Prepared X-UI connection link",
             extra={
-                "xui_sub_base_url": self.settings.xui_sub_base_url,
+                "xui_sub_base_url": node.xui_sub_base_url,
                 "sub_id": sub_id,
                 "inbound_ids": inbound_ids,
                 "connection_link": connection_link,
@@ -438,8 +476,11 @@ class VpnService:
             inbound_id=primary_inbound_id,
             expires_at=expires_at,
             traffic_limit_gb=self.settings.xui_default_traffic_gb,
+            node_key=node.key,
+            node_label=node.key,
             vpn_config={
                 "email": email,
+                **self._node_vpn_config(node),
                 **self._payment_marker_config(
                     source_payment_id, months, "created", datetime.now(UTC)
                 ),
@@ -495,16 +536,19 @@ class VpnService:
         client_payload["expiryTime"] = expiry_ms
         client_payload["enable"] = True
 
-        await self.xui_client.update_client(
-            subscription.inbound_id,
-            subscription.xui_client_id,
-            {"clients": [client_payload]},
-            enable=True,
-        )
+        node = self._node_selector(session).get_node_for_subscription(subscription)
+        async with self._xui_client_for_node(node) as xui_client:
+            await xui_client.update_client(
+                subscription.inbound_id,
+                subscription.xui_client_id,
+                {"clients": [client_payload]},
+                enable=True,
+            )
 
         vpn_config["client"] = client_payload
         vpn_config["provisioned_client"] = client_payload
         vpn_config["expires_at"] = expires_at.isoformat()
+        vpn_config.update(self._node_vpn_config(node))
         vpn_config.update(
             self._payment_marker_config(
                 source_payment_id, months, "extended", datetime.now(UTC)
@@ -707,7 +751,7 @@ class VpnService:
         email: str,
         inbound: dict[str, Any],
         protocol: Any,
-        app_settings: Settings,
+        public_host: str | None,
         stream_settings: dict[str, Any],
     ) -> str:
         """Build a VLESS URI from inbound data when X-UI has no ready link."""
@@ -718,7 +762,7 @@ class VpnService:
             )
             raise RuntimeError(msg)
 
-        address = app_settings.xui_public_host
+        address = public_host
         if not address:
             msg = "XUI_PUBLIC_HOST is required for manual VLESS URI generation"
             raise RuntimeError(msg)
