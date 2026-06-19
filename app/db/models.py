@@ -18,6 +18,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -352,6 +353,13 @@ class Payment(Base):
             "status",
             "provider_expires_at",
         ),
+        Index(
+            "uq_payments_provider_payment_id",
+            "provider",
+            "provider_payment_id",
+            unique=True,
+            postgresql_where=text("provider_payment_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -362,7 +370,7 @@ class Payment(Base):
         ForeignKey("subscriptions.id", ondelete="SET NULL")
     )
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
-    provider_payment_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    provider_payment_id: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[PaymentStatus] = mapped_column(
         String(32),
         default=PaymentStatus.PENDING,
