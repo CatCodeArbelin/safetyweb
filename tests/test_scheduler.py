@@ -82,9 +82,13 @@ def test_create_scheduler_adds_platega_jobs_for_live_platega_provider() -> None:
 
 
 @pytest.mark.anyio
-async def test_process_pending_payment_webhooks_skips_non_platega_provider(monkeypatch) -> None:
+async def test_process_pending_payment_webhooks_skips_non_platega_provider(
+    monkeypatch,
+) -> None:
     def fail_session_maker():
-        raise AssertionError("Webhook retry must not load events for non-Platega providers")
+        raise AssertionError(
+            "Webhook retry must not load events for non-Platega providers"
+        )
 
     monkeypatch.setattr(scheduler_module, "async_session_maker", fail_session_maker)
 
@@ -115,7 +119,9 @@ async def test_process_pending_payment_webhooks_skips_test_mode(monkeypatch) -> 
 
 
 @pytest.mark.anyio
-async def test_process_pending_payment_webhooks_loads_platega_events(monkeypatch) -> None:
+async def test_process_pending_payment_webhooks_loads_platega_events(
+    monkeypatch,
+) -> None:
     events = [SimpleNamespace(id=1), SimpleNamespace(id=2)]
     processed_event_ids = []
 
@@ -169,7 +175,9 @@ async def test_process_pending_payment_webhooks_loads_platega_events(monkeypatch
 
 
 @pytest.mark.anyio
-async def test_reconcile_platega_payments_skips_pending_without_provider_id(monkeypatch) -> None:
+async def test_reconcile_platega_payments_skips_pending_without_provider_id(
+    monkeypatch,
+) -> None:
     payments = [
         SimpleNamespace(
             provider_payment_id=None,
@@ -212,8 +220,11 @@ async def test_reconcile_platega_payments_skips_pending_without_provider_id(monk
 
     assert payments[0].status_reason == "platega_create_failed"
 
+
 @pytest.mark.anyio
-async def test_reconcile_platega_payments_expires_only_after_provider_pending(monkeypatch) -> None:
+async def test_reconcile_platega_payments_expires_only_after_provider_pending(
+    monkeypatch,
+) -> None:
     now = datetime.now(tz=UTC)
     payment = SimpleNamespace(
         provider_payment_id="provider-payment-id",
@@ -331,13 +342,15 @@ class FakeExpiryXuiClient:
 
 
 @pytest.mark.anyio
-async def test_deprovision_subscription_client_uses_subscription_node_and_closes_client(monkeypatch) -> None:
+async def test_deprovision_subscription_client_uses_subscription_node_and_closes_client(
+    monkeypatch,
+) -> None:
     FakeExpiryXuiClient.created_nodes = []
     FakeExpiryXuiClient.closed_nodes = []
     monkeypatch.setattr(scheduler_module, "XuiClient", FakeExpiryXuiClient)
     settings = make_settings(
         xui_expired_client_policy="disable",
-        xui_nodes_json='''
+        xui_nodes_json="""
         [
             {
                 "key": "node-a",
@@ -354,7 +367,7 @@ async def test_deprovision_subscription_client_uses_subscription_node_and_closes
                 "xui_inbound_ids": [2]
             }
         ]
-        ''',
+        """,
     )
     node_selector = scheduler_module.NodeSelectorService(settings=settings)
     subscription = SimpleNamespace(
@@ -373,3 +386,116 @@ async def test_deprovision_subscription_client_uses_subscription_node_and_closes
 
     assert FakeExpiryXuiClient.created_nodes == ["node-b"]
     assert FakeExpiryXuiClient.closed_nodes == ["node-b"]
+
+
+@pytest.mark.anyio
+async def test_expire_subscriptions_records_deprovision_failure_and_continues(
+    monkeypatch,
+) -> None:
+    commits = []
+    messages = []
+    now = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    failed = SimpleNamespace(
+        id=10,
+        user=SimpleNamespace(telegram_id=1001),
+        node_key="node-a",
+        status=scheduler_module.SubscriptionStatus.ACTIVE,
+        disabled_at=None,
+        expires_at=now - timedelta(hours=1),
+        vpn_config={"client": {"id": "failed-client"}},
+    )
+    succeeded = SimpleNamespace(
+        id=11,
+        user=SimpleNamespace(telegram_id=1002),
+        node_key="node-b",
+        status=scheduler_module.SubscriptionStatus.ACTIVE,
+        disabled_at=None,
+        expires_at=now - timedelta(hours=1),
+        vpn_config={"client": {"id": "succeeded-client"}},
+    )
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def commit(self):
+            commits.append((failed.status, succeeded.status))
+
+    class FakeBot:
+        async def send_message(self, telegram_id, text):
+            messages.append((telegram_id, text))
+
+    async def fake_expired_active_subscriptions(session, current_time):
+        assert current_time == now
+        return [failed, succeeded]
+
+    async def fake_deprovision(subscription, node_selector, settings):
+        if subscription is failed:
+            raise RuntimeError("secret=super-secret broken")
+
+    async def fake_create_notification_event(
+        session, *, subscription, notification_type
+    ):
+        assert subscription is succeeded
+        assert (
+            notification_type == scheduler_module.SubscriptionNotificationType.EXPIRED
+        )
+        return True
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+
+    monkeypatch.setattr(scheduler_module, "datetime", FixedDatetime)
+    monkeypatch.setattr(scheduler_module, "async_session_maker", lambda: FakeSession())
+    monkeypatch.setattr(
+        scheduler_module,
+        "_expired_active_subscriptions",
+        fake_expired_active_subscriptions,
+    )
+    monkeypatch.setattr(
+        scheduler_module, "_deprovision_subscription_client", fake_deprovision
+    )
+    monkeypatch.setattr(
+        scheduler_module, "_create_notification_event", fake_create_notification_event
+    )
+
+    await scheduler_module.expire_subscriptions(
+        bot=FakeBot(),
+        settings=make_settings(admin_ids=[9001], xui_expired_client_policy="delete"),
+    )
+
+    assert failed.status == scheduler_module.SubscriptionStatus.ACTIVE
+    assert failed.disabled_at is None
+    assert failed.node_key == "node-a"
+    assert failed.vpn_config["deprovision_failed_at"] == now.isoformat()
+    assert failed.vpn_config["deprovision_policy"] == "delete"
+    assert failed.vpn_config["deprovision_error"] == "secret=*** broken"
+    assert failed.vpn_config["node_slot_released"] is False
+    assert succeeded.status == scheduler_module.SubscriptionStatus.EXPIRED
+    assert succeeded.disabled_at == now
+    assert succeeded.node_key == "node-b"
+    assert succeeded.vpn_config["deprovisioned_at"] == now.isoformat()
+    assert succeeded.vpn_config["deprovision_policy"] == "delete"
+    assert succeeded.vpn_config["node_slot_released"] is True
+    assert commits == [
+        (
+            scheduler_module.SubscriptionStatus.ACTIVE,
+            scheduler_module.SubscriptionStatus.ACTIVE,
+        ),
+        (
+            scheduler_module.SubscriptionStatus.ACTIVE,
+            scheduler_module.SubscriptionStatus.EXPIRED,
+        ),
+    ]
+    assert messages[0][0] == 9001
+    assert "Subscription ID: <code>10</code>" in messages[0][1]
+    assert "Telegram ID: <code>1001</code>" in messages[0][1]
+    assert "Node key: <code>node-a</code>" in messages[0][1]
+    assert "Policy: <code>delete</code>" in messages[0][1]
+    assert "secret=*** broken" in messages[0][1]
+    assert messages[1][0] == 1002
