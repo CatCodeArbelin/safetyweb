@@ -207,3 +207,61 @@ def test_create_recovery_payment_records_sanitized_payload_metadata(monkeypatch)
         }
 
     asyncio.run(run())
+
+
+def test_platega_status_transition_rules_allow_required_paths() -> None:
+    assert PlategaWebhookService._is_status_transition_allowed(
+        PaymentStatus.PENDING,
+        PaymentStatus.PAID,
+        "CONFIRMED",
+    )
+    assert PlategaWebhookService._is_status_transition_allowed(
+        PaymentStatus.FAILED,
+        PaymentStatus.PAID,
+        "CONFIRMED",
+    )
+    assert PlategaWebhookService._is_status_transition_allowed(
+        PaymentStatus.EXPIRED,
+        PaymentStatus.PAID,
+        "CONFIRMED",
+    )
+    assert PlategaWebhookService._is_status_transition_allowed(
+        PaymentStatus.PAID,
+        PaymentStatus.REFUNDED,
+        "CHARGEBACKED",
+    )
+
+
+def test_platega_status_transition_rules_reject_forbidden_paths() -> None:
+    for current_status, mapped_status in (
+        (PaymentStatus.PAID, PaymentStatus.PENDING),
+        (PaymentStatus.PAID, PaymentStatus.FAILED),
+        (PaymentStatus.REFUNDED, PaymentStatus.PENDING),
+        (PaymentStatus.REFUNDED, PaymentStatus.PAID),
+        (PaymentStatus.FAILED, PaymentStatus.PENDING),
+        (PaymentStatus.EXPIRED, PaymentStatus.PENDING),
+    ):
+        assert not PlategaWebhookService._is_status_transition_allowed(
+            current_status,
+            mapped_status,
+            "PENDING",
+        )
+
+
+def test_platega_dangerous_status_conflicts_are_limited_to_admin_alert_cases() -> None:
+    assert PlategaWebhookService._is_dangerous_status_conflict(
+        PaymentStatus.PAID,
+        PaymentStatus.FAILED,
+    )
+    assert PlategaWebhookService._is_dangerous_status_conflict(
+        PaymentStatus.PAID,
+        PaymentStatus.PENDING,
+    )
+    assert PlategaWebhookService._is_dangerous_status_conflict(
+        PaymentStatus.REFUNDED,
+        PaymentStatus.PAID,
+    )
+    assert not PlategaWebhookService._is_dangerous_status_conflict(
+        PaymentStatus.PAID,
+        PaymentStatus.REFUNDED,
+    )
