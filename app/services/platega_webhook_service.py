@@ -1,6 +1,7 @@
 """Platega webhook event processing."""
 
 import json
+from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from html import escape
@@ -647,4 +648,5 @@ class PlategaWebhookService:
         if self.bot is None:
             return
         for admin_id in self.settings.admin_ids:
-            await self.bot.send_message(admin_id, text)
+            with suppress(Exception):
+                await self.bot.send_message(admin_id, text)
