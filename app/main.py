@@ -75,7 +75,7 @@ from app.services.vpn_service import (
 )
 from app.services.xui_client import XuiClient, XuiError
 from app.tasks.scheduler import create_scheduler
-from app.utils.sanitize import sanitize_exception
+from app.utils.sanitize import sanitize_exception, sanitize_string
 
 TARIFFS = {
     1: "1 месяц",
@@ -261,6 +261,7 @@ def format_capacity_snapshot(snapshot: list[NodeCapacityInfo]) -> str:
         )
     return "\n".join(lines)
 
+
 def format_provision_expires(result: ProvisionResult) -> str:
     """Format provision expiry timestamp for bot messages."""
     return escape(result.expires_at.strftime("%Y-%m-%d %H:%M UTC"))
@@ -421,6 +422,16 @@ def format_node_status(enabled: bool) -> str:
 def format_node_public_host(public_host: str | None) -> str:
     """Format an optional public node host for admin diagnostics."""
     return escape(public_host or "—")
+
+
+def get_vpn_config_diagnostic_value(vpn_config: dict[str, Any], key: str) -> str:
+    """Return a sanitized non-secret vpn_config diagnostic value."""
+    value = vpn_config.get(key)
+    if value is None or value == "":
+        return "—"
+    if isinstance(value, bool):
+        return format_yes_no(value)
+    return sanitize_string(str(value))[:500]
 
 
 def get_subscription_node_detail(
@@ -896,7 +907,9 @@ async def check_payment_command(
             and (payment.provider_data or {}).get("provisioning_blocked_reason")
             == "no_available_nodes"
         ):
-            await PaymentFinalizationService(settings=settings, bot=message.bot).finalize_paid_payment(
+            await PaymentFinalizationService(
+                settings=settings, bot=message.bot
+            ).finalize_paid_payment(
                 provider=payment.provider,
                 provider_payment_id=provider_payment_id,
                 source="admin_check_payment",
@@ -1032,6 +1045,11 @@ async def user_command(
         active_subscription = await subscription_repository.get_active_by_telegram_id(
             telegram_id
         )
+        latest_subscription = active_subscription
+        if latest_subscription is None:
+            latest_subscription = (
+                await subscription_repository.get_latest_by_telegram_id(telegram_id)
+            )
         discount_percent = (
             await benefit_repository.get_active_discount_percent_by_telegram_id(
                 telegram_id
@@ -1049,9 +1067,18 @@ async def user_command(
     )
     username = f"@{user.username}" if user.username else "—"
     has_connection_link = bool(
-        active_subscription is not None
-        and active_subscription.vpn_config
-        and active_subscription.vpn_config.get("connection_link")
+        latest_subscription is not None
+        and latest_subscription.vpn_config
+        and latest_subscription.vpn_config.get("connection_link")
+    )
+
+    diagnostic_subscription = latest_subscription
+    vpn_config = (
+        (diagnostic_subscription.vpn_config or {}) if diagnostic_subscription else {}
+    )
+    latest_pending_payment = next(
+        (payment for payment in payments if payment.status == PaymentStatus.PENDING),
+        None,
     )
 
     lines = [
@@ -1063,16 +1090,33 @@ async def user_command(
         f"trial used at: <code>{format_optional_datetime(user.trial_used_at)}</code>",
         f"trial subscription id: <code>{escape(str(user.trial_subscription_id or '—'))}</code>",
         f"active subscription: <code>{format_yes_no(active_subscription is not None)}</code>",
-        f"subscription id: <code>{escape(str(active_subscription.id if active_subscription else '—'))}</code>",
-        f"expires at: <code>{format_optional_datetime(active_subscription.expires_at if active_subscription else None)}</code>",
-        f"xui_email: <code>{escape(active_subscription.xui_email if active_subscription else '—')}</code>",
+        f"subscription id: <code>{escape(str(diagnostic_subscription.id if diagnostic_subscription else '—'))}</code>",
+        f"expires at: <code>{format_optional_datetime(diagnostic_subscription.expires_at if diagnostic_subscription else None)}</code>",
+        f"xui_email: <code>{escape(diagnostic_subscription.xui_email if diagnostic_subscription else '—')}</code>",
+        f"status: <code>{escape(str(diagnostic_subscription.status if diagnostic_subscription else '—'))}</code>",
         "node_key: "
-        f"<code>{escape(get_subscription_node_detail(active_subscription, 'node_key', 'node_key'))}</code>",
+        f"<code>{escape(get_subscription_node_detail(diagnostic_subscription, 'node_key', 'node_key'))}</code>",
         "node_label: "
-        f"<code>{escape(get_subscription_node_detail(active_subscription, 'node_label', 'node_label'))}</code>",
+        f"<code>{escape(get_subscription_node_detail(diagnostic_subscription, 'node_label', 'node_label'))}</code>",
         "node_public_host: "
-        f"<code>{escape(get_subscription_node_detail(active_subscription, 'node_public_host'))}</code>",
+        f"<code>{escape(get_subscription_node_detail(diagnostic_subscription, 'node_public_host'))}</code>",
         f"connection link exists: <code>{format_yes_no(has_connection_link)}</code>",
+        "deprovisioned_at: "
+        f"<code>{escape(get_vpn_config_diagnostic_value(vpn_config, 'deprovisioned_at'))}</code>",
+        "deprovision_policy: "
+        f"<code>{escape(get_vpn_config_diagnostic_value(vpn_config, 'deprovision_policy'))}</code>",
+        "node_slot_released: "
+        f"<code>{escape(get_vpn_config_diagnostic_value(vpn_config, 'node_slot_released'))}</code>",
+        "deprovision_failed_at: "
+        f"<code>{escape(get_vpn_config_diagnostic_value(vpn_config, 'deprovision_failed_at'))}</code>",
+        "deprovision_error: "
+        f"<code>{escape(get_vpn_config_diagnostic_value(vpn_config, 'deprovision_error'))}</code>",
+        "latest pending reserved_node_key: "
+        f"<code>{escape(latest_pending_payment.reserved_node_key if latest_pending_payment else '—')}</code>",
+        "latest pending reserved_node_name: "
+        f"<code>{escape(latest_pending_payment.reserved_node_name if latest_pending_payment else '—')}</code>",
+        "latest pending node_reservation_expires_at: "
+        f"<code>{format_optional_datetime(latest_pending_payment.node_reservation_expires_at if latest_pending_payment else None)}</code>",
         f"early buyer discount percent: <code>{discount_percent}</code>",
         f"pending referral bonus days: <code>{pending_bonus_days}</code>",
         "",
@@ -1930,7 +1974,7 @@ async def send_protected_link(message: Message, telegram_id: int) -> None:
         return
 
     await message.answer(
-        "🔗 Ваша ссылка для защищённого соединения:\n" f"<code>{escape(link)}</code>"
+        f"🔗 Ваша ссылка для защищённого соединения:\n<code>{escape(link)}</code>"
     )
 
 
