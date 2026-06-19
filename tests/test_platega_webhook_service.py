@@ -25,6 +25,19 @@ def test_map_platega_status_does_not_treat_expired_as_provider_expired() -> None
     assert map_platega_status("expired") == PaymentStatus.PENDING
 
 
+def test_map_platega_status_treats_broad_aliases_as_pending() -> None:
+    for status in (
+        "PAID",
+        "SUCCESS",
+        "REFUNDED",
+        "TIMEOUT",
+        "DECLINED",
+        "FAILED",
+        "CHARGEBACK",
+    ):
+        assert map_platega_status(status) == PaymentStatus.PENDING
+
+
 def test_extract_recovery_payload_handles_json_payload() -> None:
     payload = PlategaWebhookService._extract_recovery_payload(
         {
