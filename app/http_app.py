@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, status
@@ -32,7 +33,18 @@ def create_app(settings: Settings | None = None, bot: Bot | None = None) -> Fast
         """Persist a Platega callback and enqueue asynchronous processing."""
         raw_body = await request.body()
         payload_hash = hashlib.sha256(b"platega:" + raw_body).hexdigest()
-        _verify_callback_headers(request, app_settings)
+        verification_error = _verify_callback_headers(request, app_settings)
+        if verification_error is not None:
+            await _notify_rejected_callback_headers(
+                bot,
+                app_settings,
+                request,
+                verification_error,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=verification_error.detail,
+            )
         payload = await _json_payload(request)
 
         provider_payment_id = _extract_first_str(
@@ -117,22 +129,60 @@ async def _json_payload(request: Request) -> dict[str, Any]:
     return payload
 
 
-def _verify_callback_headers(request: Request, settings: Settings) -> None:
+class CallbackHeaderVerificationError(StrEnum):
+    """Reasons a Platega callback header verification can fail."""
+
+    MERCHANT_ID = "merchant_id"
+    SECRET = "secret"
+
+    @property
+    def detail(self) -> str:
+        """Return the HTTP error detail for this verification failure."""
+        if self is CallbackHeaderVerificationError.MERCHANT_ID:
+            return "Invalid callback merchant id"
+        return "Invalid callback secret"
+
+
+def _verify_callback_headers(
+    request: Request,
+    settings: Settings,
+) -> CallbackHeaderVerificationError | None:
     merchant_id = request.headers.get("x-merchantid", "")
     expected_merchant_id = settings.platega_merchant_id or "\0"
     if not hmac.compare_digest(merchant_id, expected_merchant_id):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid callback merchant id",
-        )
+        return CallbackHeaderVerificationError.MERCHANT_ID
 
     secret = request.headers.get("x-secret", "")
     expected_secret = _expected_callback_secret(settings)
     if not hmac.compare_digest(secret, expected_secret):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid callback secret",
-        )
+        return CallbackHeaderVerificationError.SECRET
+
+    return None
+
+
+async def _notify_rejected_callback_headers(
+    bot: Bot | None,
+    settings: Settings,
+    request: Request,
+    reason: CallbackHeaderVerificationError,
+) -> None:
+    """Notify admins about rejected Platega callback headers without secrets."""
+    if bot is None:
+        return
+
+    from app.main import notify_admins
+
+    client_host = request.client.host if request.client is not None else None
+    text = (
+        "⚠️ Rejected Platega callback headers\n"
+        f"Reason: invalid {reason.value}\n"
+        f"Path: {request.url.path}\n"
+        f"Client: {client_host or 'unknown'}\n"
+        f"User-Agent: {request.headers.get('user-agent') or 'unknown'}\n"
+        f"X-Forwarded-For: {request.headers.get('x-forwarded-for') or 'unknown'}\n"
+        f"Merchant ID: {request.headers.get('x-merchantid') or 'missing'}"
+    )
+    await notify_admins(bot, settings, text)
 
 
 def _expected_callback_secret(settings: Settings) -> str:
