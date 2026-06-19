@@ -352,6 +352,19 @@ def format_admin_payment_details(
     return "\n".join(lines)
 
 
+def platega_lookup_credentials_configured(settings: Settings) -> bool:
+    """Return whether Platega lookup can be attempted with configured credentials."""
+    return bool(settings.platega_merchant_id and settings.platega_api_key is not None)
+
+
+def platega_lookup_not_configured_message() -> str:
+    """Return a safe admin message for unavailable Platega lookup."""
+    return (
+        "Локальный платеж не найден.\n"
+        "Platega lookup не настроен: отсутствуют обязательные учетные данные."
+    )
+
+
 async def recover_orphan_platega_payment(
     provider_payment_id: str,
     transaction: dict,
@@ -582,24 +595,32 @@ async def check_payment_command(
     if payment is not None:
         provider_status = None
         if payment.provider == PLATEGA_PROVIDER_NAME:
-            client = PlategaClient(settings=settings)
+            client = None
             try:
+                client = PlategaClient(settings=settings)
                 transaction = await client.get_transaction(provider_payment_id)
+            except ValueError:
+                transaction = None
             finally:
-                await client.close()
-            provider_status = service._extract_transaction_status(transaction) or "—"
-            processed = await service.process_transaction_status(
-                provider_payment_id,
-                provider_status,
-                months=payment.tariff_months,
-                status_reason_prefix="Admin payment check",
-                transaction=transaction,
-            )
-            if processed:
-                async with async_session_maker() as session:
-                    payment = await PaymentRepository(
-                        session
-                    ).get_by_provider_payment_id_any_provider(provider_payment_id)
+                if client is not None:
+                    await client.close()
+
+            if transaction is None:
+                provider_status = "Platega lookup не настроен"
+            else:
+                provider_status = service._extract_transaction_status(transaction) or "—"
+                processed = await service.process_transaction_status(
+                    provider_payment_id,
+                    provider_status,
+                    months=payment.tariff_months,
+                    status_reason_prefix="Admin payment check",
+                    transaction=transaction,
+                )
+                if processed:
+                    async with async_session_maker() as session:
+                        payment = await PaymentRepository(
+                            session
+                        ).get_by_provider_payment_id_any_provider(provider_payment_id)
 
         await message.answer(
             format_admin_payment_details(
@@ -617,18 +638,26 @@ async def check_payment_command(
         )
         return
 
-    client = PlategaClient(settings=settings)
+    if not platega_lookup_credentials_configured(settings):
+        await message.answer(platega_lookup_not_configured_message())
+        return
+
+    client = None
     try:
+        client = PlategaClient(settings=settings)
         transaction = await client.get_transaction(provider_payment_id)
-    except Exception as error:
+    except ValueError:
+        await message.answer(platega_lookup_not_configured_message())
+        return
+    except Exception:
         await message.answer(
             "Локальный платеж не найден.\n"
-            "Platega transaction recovery невозможен: "
-            f"<code>{escape(str(error))}</code>"
+            "Platega transaction recovery невозможен: ошибка запроса к Platega."
         )
         return
     finally:
-        await client.close()
+        if client is not None:
+            await client.close()
 
     recovered = await recover_orphan_platega_payment(
         provider_payment_id,
