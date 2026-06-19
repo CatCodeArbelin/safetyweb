@@ -390,6 +390,34 @@ def format_node_limit(limit: int | None) -> str:
     return "—" if limit is None else escape(str(limit))
 
 
+def format_capacity_limit(limit: int | None) -> str:
+    """Format an effective node capacity limit for admin diagnostics."""
+    return "∞" if limit is None else escape(str(limit))
+
+
+def format_free_slots(capacity: NodeCapacityInfo) -> str:
+    """Format remaining slots without implying disabled nodes can accept traffic."""
+    if not capacity.enabled:
+        return "—"
+    if capacity.max_active_subscriptions is None:
+        return "∞"
+    return escape(
+        str(
+            max(
+                capacity.max_active_subscriptions
+                - capacity.active_count
+                - capacity.reserved_count,
+                0,
+            )
+        )
+    )
+
+
+def format_node_status(enabled: bool) -> str:
+    """Format node enabled status for admin diagnostics."""
+    return "enabled" if enabled else "disabled"
+
+
 def format_node_public_host(public_host: str | None) -> str:
     """Format an optional public node host for admin diagnostics."""
     return escape(public_host or "—")
@@ -741,18 +769,20 @@ async def nodes_command(message: Message, settings: Settings) -> None:
         await message.answer("Недостаточно прав.")
         return
 
-    active_counts = await get_active_subscription_counts_by_node()
-    lines = ["🖥 Ноды"]
-    for node in settings.xui_nodes:
+    snapshot = await NodeSelectorService(settings=settings).get_capacity_snapshot()
+    lines = ["🧩 Ноды цифрового доступа"]
+    for capacity in snapshot:
+        node = settings.get_xui_node(capacity.key)
         lines.extend(
             [
                 "",
                 f"key: <code>{escape(node.key)}</code>",
                 f"label: <code>{format_node_label(node)}</code>",
-                f"enabled: <code>{format_yes_no(node.enabled)}</code>",
-                f"active subscriptions: <code>{active_counts.get(node.key, 0)}</code>",
-                f"limit: <code>{format_node_limit(node.max_active_subscriptions)}</code>",
-                f"public host: <code>{format_node_public_host(node.xui_public_host)}</code>",
+                f"Статус: <code>{format_node_status(capacity.enabled)}</code>",
+                f"Active: <code>{capacity.active_count}</code>",
+                f"Reserved: <code>{capacity.reserved_count}</code>",
+                f"Свободно: <code>{format_free_slots(capacity)}</code>",
+                f"Public host: <code>{format_node_public_host(node.xui_public_host)}</code>",
             ]
         )
 
@@ -783,18 +813,22 @@ async def node_command(
         )
         return
 
-    active_counts = await get_active_subscription_counts_by_node()
+    snapshot = await NodeSelectorService(settings=settings).get_capacity_snapshot()
+    capacity_by_key = {capacity.key: capacity for capacity in snapshot}
+    capacity = capacity_by_key[node.key]
     health_status = await get_node_health_status(settings, node)
     lines = [
-        "🖥 Нода",
+        f"🧩 Нода {escape(node.key)}",
         f"key: <code>{escape(node.key)}</code>",
         f"label: <code>{format_node_label(node)}</code>",
-        f"enabled: <code>{format_yes_no(node.enabled)}</code>",
-        f"public host: <code>{format_node_public_host(node.xui_public_host)}</code>",
+        f"Статус: <code>{format_node_status(capacity.enabled)}</code>",
+        f"Public host: <code>{format_node_public_host(node.xui_public_host)}</code>",
         f"inbound IDs: <code>{format_node_inbound_ids(node.xui_inbound_ids)}</code>",
-        f"active count: <code>{active_counts.get(node.key, 0)}</code>",
-        f"max active subscriptions: <code>{format_node_limit(node.max_active_subscriptions)}</code>",
-        f"health: <code>{escape(health_status)}</code>",
+        f"Active subscriptions: <code>{capacity.active_count}</code>",
+        f"Pending reservations: <code>{capacity.reserved_count}</code>",
+        f"Max active subscriptions: <code>{format_capacity_limit(capacity.max_active_subscriptions)}</code>",
+        f"Free slots: <code>{format_free_slots(capacity)}</code>",
+        f"Health: <code>{escape(health_status)}</code>",
     ]
     await message.answer("\n".join(lines))
 
