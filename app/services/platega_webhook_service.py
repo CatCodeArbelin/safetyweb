@@ -316,6 +316,11 @@ class PlategaWebhookService:
         if telegram_id is None or months is None:
             return None
 
+        amount = self._extract_transaction_amount(transaction)
+        currency = self._extract_transaction_currency(transaction)
+        if amount is None or currency is None:
+            return None
+
         user = await UserRepository(repository.session).get_or_create(telegram_id)
         return await repository.create_payment(
             user_id=user.id,
@@ -323,12 +328,8 @@ class PlategaWebhookService:
             provider_payment_id=provider_payment_id,
             status=PaymentStatus.PENDING,
             tariff_months=months,
-            amount=self._extract_decimal(transaction, "amount") or Decimal("0"),
-            currency=(
-                str(self._extract_first_payload_value(transaction, "currency") or "RUB")
-                .strip()
-                .upper()
-            ),
+            amount=amount,
+            currency=currency,
             provider_data={
                 "recovered_from_webhook": True,
                 "last_status_response": self._sanitize_transaction(transaction),
@@ -436,6 +437,39 @@ class PlategaWebhookService:
             return None
 
     @classmethod
+    def _extract_transaction_amount(cls, transaction: dict[str, Any]) -> Decimal | None:
+        value = cls._extract_payment_details_value(transaction, "amount")
+        if value is None:
+            return cls._extract_decimal(transaction, "amount")
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return cls._extract_decimal(transaction, "amount")
+
+    @classmethod
+    def _extract_transaction_currency(cls, transaction: dict[str, Any]) -> str | None:
+        value = cls._extract_payment_details_value(transaction, "currency")
+        if value is None:
+            value = cls._extract_first_payload_value(transaction, "currency")
+        if value is None:
+            return None
+        currency = str(value).strip().upper()
+        return currency or None
+
+    @staticmethod
+    def _extract_payment_details_value(
+        transaction: dict[str, Any],
+        key: str,
+    ) -> Any | None:
+        payment_details = transaction.get("paymentDetails")
+        if not isinstance(payment_details, dict):
+            return None
+        value = payment_details.get(key)
+        if value is None or value == "":
+            return None
+        return value
+
+    @classmethod
     def _sanitize_transaction(cls, data: dict[str, Any]) -> dict[str, Any]:
         sanitized = cls._sanitize_value(data)
         return sanitized if isinstance(sanitized, dict) else {}
@@ -475,7 +509,13 @@ class PlategaWebhookService:
         for key in keys:
             if key in data:
                 values.append(data[key])
-        for nested_key in ("payload", "metadata", "data", "transaction"):
+        for nested_key in (
+            "payload",
+            "metadata",
+            "data",
+            "transaction",
+            "paymentDetails",
+        ):
             nested = data.get(nested_key)
             if isinstance(nested, dict):
                 values.extend(cls._candidate_values(nested, *keys))
