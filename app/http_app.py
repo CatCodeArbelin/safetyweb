@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
@@ -18,6 +19,10 @@ from app.services.platega_webhook_service import PlategaWebhookService
 
 if TYPE_CHECKING:
     from aiogram import Bot
+
+
+_INVALID_HEADER_ALERTS: dict[str, datetime] = {}
+INVALID_HEADER_ALERT_THROTTLE_SECONDS = 900
 
 
 def create_app(settings: Settings | None = None, bot: Bot | None = None) -> FastAPI:
@@ -170,19 +175,30 @@ async def _notify_rejected_callback_headers(
     if bot is None:
         return
 
+    client_ip = request.client.host if request.client else "unknown"
+    throttle_key = f"{reason.value}:{client_ip}"
+    now = datetime.now(UTC)
+    last_alerted_at = _INVALID_HEADER_ALERTS.get(throttle_key)
+    if (
+        last_alerted_at is not None
+        and now - last_alerted_at
+        < timedelta(seconds=INVALID_HEADER_ALERT_THROTTLE_SECONDS)
+    ):
+        return
+
     from app.main import notify_admins
 
-    client_host = request.client.host if request.client is not None else None
     text = (
         "⚠️ Rejected Platega callback headers\n"
         f"Reason: invalid {reason.value}\n"
         f"Path: {request.url.path}\n"
-        f"Client: {client_host or 'unknown'}\n"
+        f"Client: {client_ip}\n"
         f"User-Agent: {request.headers.get('user-agent') or 'unknown'}\n"
         f"X-Forwarded-For: {request.headers.get('x-forwarded-for') or 'unknown'}\n"
         f"Merchant ID: {request.headers.get('x-merchantid') or 'missing'}"
     )
     await notify_admins(bot, settings, text)
+    _INVALID_HEADER_ALERTS[throttle_key] = now
 
 
 def _expected_callback_secret(settings: Settings) -> str:
