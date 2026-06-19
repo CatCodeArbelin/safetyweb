@@ -84,13 +84,47 @@ class NodeSelectorService:
         self.settings = settings or Settings()
         self.session = session
 
-    async def select_node_for_new_subscription(self) -> XuiNodeConfig:
+    async def select_node_for_new_subscription(
+        self,
+        *,
+        exclude_payment_id: int | None = None,
+    ) -> XuiNodeConfig:
         """Return an enabled node with available subscription capacity."""
         if self.session is not None:
-            return await self._select_node_for_new_subscription(self.session)
+            return await self._select_node_for_new_subscription(
+                self.session,
+                exclude_payment_id=exclude_payment_id,
+            )
 
         async with async_session_maker() as session:
-            return await self._select_node_for_new_subscription(session)
+            return await self._select_node_for_new_subscription(
+                session,
+                exclude_payment_id=exclude_payment_id,
+            )
+
+    async def select_preferred_node_for_new_subscription(
+        self,
+        preferred_node_key: str,
+        *,
+        exclude_payment_id: int | None = None,
+    ) -> XuiNodeConfig | None:
+        """Return the preferred node when it exists and has capacity.
+
+        Unknown node keys are ignored so callers can fall back to automatic selection.
+        """
+        if self.session is not None:
+            return await self._select_preferred_node_for_new_subscription(
+                self.session,
+                preferred_node_key,
+                exclude_payment_id=exclude_payment_id,
+            )
+
+        async with async_session_maker() as session:
+            return await self._select_preferred_node_for_new_subscription(
+                session,
+                preferred_node_key,
+                exclude_payment_id=exclude_payment_id,
+            )
 
     async def get_capacity_snapshot(self) -> list[NodeCapacityInfo]:
         """Return the current configured node capacity snapshot."""
@@ -112,9 +146,14 @@ class NodeSelectorService:
     async def _select_node_for_new_subscription(
         self,
         session: AsyncSession,
+        *,
+        exclude_payment_id: int | None = None,
     ) -> XuiNodeConfig:
         await lock_capacity_selection(session)
-        occupancy_counts = await get_node_occupancy_counts(session)
+        occupancy_counts = await get_node_occupancy_counts(
+            session,
+            exclude_payment_id=exclude_payment_id,
+        )
         eligible_nodes: list[tuple[int, int, str, XuiNodeConfig]] = []
 
         for node in self.settings.xui_nodes:
@@ -139,6 +178,35 @@ class NodeSelectorService:
             raise NoAvailableNodeError(msg)
 
         return min(eligible_nodes, key=lambda item: item[:3])[3]
+
+    async def _select_preferred_node_for_new_subscription(
+        self,
+        session: AsyncSession,
+        preferred_node_key: str,
+        *,
+        exclude_payment_id: int | None = None,
+    ) -> XuiNodeConfig | None:
+        await lock_capacity_selection(session)
+        try:
+            node = self.settings.get_xui_node(preferred_node_key)
+        except KeyError:
+            return None
+        if not node.enabled:
+            msg = f"Preferred XUI node '{preferred_node_key}' is disabled"
+            raise NoAvailableNodeError(msg)
+
+        occupancy_counts = await get_node_occupancy_counts(
+            session,
+            exclude_payment_id=exclude_payment_id,
+        )
+        active_count, reserved_count = occupancy_counts.get(node.key, (0, 0))
+        limit = node.max_active_subscriptions
+        if limit is None:
+            limit = self.settings.xui_default_max_active_subscriptions
+        if limit is not None and active_count + reserved_count >= limit:
+            msg = f"Preferred XUI node '{preferred_node_key}' has no capacity"
+            raise NoAvailableNodeError(msg)
+        return node
 
     async def _get_capacity_snapshot(
         self,

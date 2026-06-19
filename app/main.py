@@ -41,6 +41,7 @@ from app.bot_commands import (
     user_telegram_bot_commands,
 )
 from app.config import Settings, XuiNodeConfig
+from app.db.models import PaymentStatus
 from app.http_app import create_app
 from app.db.repositories import (
     CustomerBenefitRepository,
@@ -58,13 +59,13 @@ from app.services.payment_service import (
     PaymentService,
 )
 from app.services.platega_client import PlategaClient
-from app.services.platega_webhook_service import PlategaWebhookService
-from app.services.referral_service import ReferralService
 from app.services.node_selector_service import (
     NoAvailableNodeError,
     NodeCapacityInfo,
     NodeSelectorService,
 )
+from app.services.platega_webhook_service import PlategaWebhookService
+from app.services.referral_service import ReferralService
 from app.services.stats_service import AdminStats, StatsService
 from app.services.subscription_service import SubscriptionService
 from app.services.vpn_service import (
@@ -854,6 +855,22 @@ async def check_payment_command(
                         payment = await PaymentRepository(
                             session
                         ).get_by_provider_payment_id_any_provider(provider_payment_id)
+
+        if (
+            payment.status == PaymentStatus.PAID
+            and payment.subscription_id is None
+            and (payment.provider_data or {}).get("provisioning_blocked_reason")
+            == "no_available_nodes"
+        ):
+            await PaymentFinalizationService(settings=settings, bot=message.bot).finalize_paid_payment(
+                provider=payment.provider,
+                provider_payment_id=provider_payment_id,
+                source="admin_check_payment",
+            )
+            async with async_session_maker() as session:
+                payment = await PaymentRepository(
+                    session
+                ).get_by_provider_payment_id_any_provider(provider_payment_id)
 
         await message.answer(
             format_admin_payment_details(

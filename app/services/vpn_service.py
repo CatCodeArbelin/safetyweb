@@ -117,6 +117,8 @@ class VpnService:
         telegram_id: int,
         months: int,
         source_payment_id: str | None = None,
+        preferred_node_key: str | None = None,
+        exclude_payment_id: int | None = None,
     ) -> ProvisionResult:
         """Create a new subscription or extend the user's active one."""
         if self.session is not None:
@@ -131,7 +133,12 @@ class VpnService:
                     source_payment_id=source_payment_id,
                 )
             return await self._create_client(
-                self.session, telegram_id, months, source_payment_id=source_payment_id
+                self.session,
+                telegram_id,
+                months,
+                source_payment_id=source_payment_id,
+                preferred_node_key=preferred_node_key,
+                exclude_payment_id=exclude_payment_id,
             )
 
         async with async_session_maker() as session:
@@ -147,7 +154,12 @@ class VpnService:
                 )
             else:
                 result = await self._create_client(
-                    session, telegram_id, months, source_payment_id=source_payment_id
+                    session,
+                    telegram_id,
+                    months,
+                    source_payment_id=source_payment_id,
+                    preferred_node_key=preferred_node_key,
+                    exclude_payment_id=exclude_payment_id,
                 )
             await session.commit()
             return result
@@ -405,6 +417,8 @@ class VpnService:
         telegram_id: int,
         months: int,
         source_payment_id: str | None = None,
+        preferred_node_key: str | None = None,
+        exclude_payment_id: int | None = None,
     ) -> ProvisionResult:
         """Provision a 3x-ui client and persist the matching subscription."""
         if months not in self.ALLOWED_TARIFF_MONTHS:
@@ -425,7 +439,17 @@ class VpnService:
         expires_at = datetime.now(UTC) + relativedelta(months=months)
         expiry_ms = int(expires_at.timestamp() * 1000)
         await lock_capacity_selection(session)
-        node = await self._node_selector(session).select_node_for_new_subscription()
+        node_selector = self._node_selector(session)
+        node = None
+        if preferred_node_key:
+            node = await node_selector.select_preferred_node_for_new_subscription(
+                preferred_node_key,
+                exclude_payment_id=exclude_payment_id,
+            )
+        if node is None:
+            node = await node_selector.select_node_for_new_subscription(
+                exclude_payment_id=exclude_payment_id,
+            )
         traffic_limit_gb = self._node_default_traffic_gb(node)
         total_bytes = traffic_limit_gb * 1024**3
         client_payload = {
