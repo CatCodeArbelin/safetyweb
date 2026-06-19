@@ -14,6 +14,7 @@ from app.db.session import async_session_maker
 from app.services.benefit_service import BenefitService
 from app.services.payment_service import MANUAL_PROVIDER_NAME
 from app.services.referral_service import ReferralService
+from app.services.node_selector_service import NoAvailableNodeError
 from app.services.vpn_service import ProvisionResult, VpnService
 from app.utils.sanitize import sanitize_exception
 
@@ -148,7 +149,44 @@ class PaymentFinalizationService:
 
         user_id = user.telegram_id
         try:
-            provision_result = await self._provision(provider_payment_id, user_id, months)
+            provision_result = await self._provision(
+                provider_payment_id,
+                user_id,
+                months,
+                preferred_node_key=payment.reserved_node_key,
+                exclude_payment_id=payment.id,
+            )
+        except NoAvailableNodeError:
+            blocked_at = datetime.now(tz=UTC)
+            async with async_session_maker() as session:
+                payment_repository = PaymentRepository(session)
+                payment = await payment_repository.get_by_provider_payment_id_for_update(
+                    provider,
+                    provider_payment_id,
+                )
+                if payment is not None:
+                    provider_data = dict(payment.provider_data or {})
+                    payment.status = PaymentStatus.PAID
+                    payment.provider_data = {
+                        **provider_data,
+                        "provisioning_blocked_reason": "no_available_nodes",
+                        "provisioning_blocked_at": blocked_at.isoformat(),
+                    }
+                    await session.commit()
+                    await self._notify_capacity_blocked_user(payment)
+            await self._notify_admins_safely(
+                "🚨 Оплата получена, но свободных нод нет\n"
+                f"Provider: <code>{escape(provider)}</code>\n"
+                f"Payment: <code>{escape(provider_payment_id)}</code>\n"
+                f"User: <code>{user_id}</code>"
+            )
+            return PaymentFinalizationResult(
+                payment=payment,
+                provision_result=None,
+                benefit_granted=False,
+                referral_rewards=[],
+                status="provisioning_blocked",
+            )
         except Exception as error:
             sanitized_error = self._sanitize_finalization_error(error)
             async with async_session_maker() as session:
@@ -194,6 +232,8 @@ class PaymentFinalizationService:
                 "finalization_finished_at": datetime.now(tz=UTC).isoformat(),
                 "finalization_result": provision_result.action,
             }
+            payment.provider_data.pop("provisioning_blocked_reason", None)
+            payment.provider_data.pop("provisioning_blocked_at", None)
             await session.flush()
             await session.commit()
 
@@ -218,6 +258,9 @@ class PaymentFinalizationService:
         provider_payment_id: str,
         user_id: int,
         months: int,
+        *,
+        preferred_node_key: str | None = None,
+        exclude_payment_id: int | None = None,
     ) -> ProvisionResult:
         vpn_service = VpnService(settings=self.settings)
         try:
@@ -225,6 +268,8 @@ class PaymentFinalizationService:
                 telegram_id=user_id,
                 months=months,
                 source_payment_id=provider_payment_id,
+                preferred_node_key=preferred_node_key,
+                exclude_payment_id=exclude_payment_id,
             )
         finally:
             await vpn_service.close()
@@ -276,6 +321,47 @@ class PaymentFinalizationService:
         elif isinstance(value, list):
             for item in value:
                 yield from cls._iter_payload_candidates(item)
+
+
+    async def _notify_capacity_blocked_user(self, payment: Payment) -> None:
+        if self.bot is None:
+            return
+        provider_data = dict(payment.provider_data or {})
+        if provider_data.get("capacity_blocked_user_notified_at"):
+            return
+        text = (
+            "Оплата получена ✅\n\n"
+            "Сейчас все серверы заполнены, поэтому доступ будет выдан автоматически, "
+            "как только появится свободная нода. Мы уже уведомили администратора."
+        )
+        notified_at = datetime.now(tz=UTC)
+        notify_error: str | None = None
+        try:
+            await self.bot.send_message(payment.user.telegram_id, text)
+        except Exception as error:
+            notify_error = self._sanitize_finalization_error(error)
+
+        async with async_session_maker() as session:
+            stored_payment = await PaymentRepository(
+                session
+            ).get_by_provider_payment_id_for_update(
+                payment.provider,
+                payment.provider_payment_id or "",
+            )
+            if stored_payment is None:
+                return
+            stored_data = dict(stored_payment.provider_data or {})
+            if stored_data.get("capacity_blocked_user_notified_at"):
+                return
+            if notify_error is None:
+                stored_data["capacity_blocked_user_notified_at"] = notified_at.isoformat()
+                stored_data.pop("capacity_blocked_user_notify_error", None)
+            else:
+                stored_data["capacity_blocked_user_notify_error"] = notify_error
+                stored_data["capacity_blocked_user_notify_failed_at"] = notified_at.isoformat()
+            stored_payment.provider_data = stored_data
+            payment.provider_data = stored_data
+            await session.commit()
 
     async def _notify_user_once(
         self,
