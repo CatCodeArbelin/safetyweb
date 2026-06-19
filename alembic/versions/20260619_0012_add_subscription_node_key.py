@@ -1,4 +1,4 @@
-"""Add subscription node fields.
+"""Add subscription node key.
 
 Revision ID: 20260619_0012
 Revises: 20260619_0011
@@ -20,12 +20,22 @@ def upgrade() -> None:
     """Upgrade schema."""
     op.add_column(
         "subscriptions",
-        sa.Column("node_key", sa.String(length=255), server_default="default", nullable=False),
+        sa.Column(
+            "node_key",
+            sa.String(length=64),
+            server_default="default",
+            nullable=False,
+        ),
     )
-    op.add_column("subscriptions", sa.Column("node_label", sa.String(length=255), nullable=True))
+    op.add_column(
+        "subscriptions",
+        sa.Column("node_label", sa.String(length=128), nullable=True),
+    )
+    op.create_index("ix_subscriptions_node_key", "subscriptions", ["node_key"])
 
 
 def downgrade() -> None:
     """Downgrade schema."""
+    op.drop_index("ix_subscriptions_node_key", table_name="subscriptions")
     op.drop_column("subscriptions", "node_label")
     op.drop_column("subscriptions", "node_key")
