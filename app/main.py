@@ -357,6 +357,25 @@ def format_node_public_host(public_host: str | None) -> str:
     return escape(public_host or "—")
 
 
+def get_subscription_node_detail(
+    subscription: object | None,
+    vpn_config_key: str,
+    subscription_attr: str | None = None,
+) -> str:
+    """Return a non-secret subscription node detail for admin diagnostics."""
+    if subscription is None:
+        return "—"
+
+    if subscription_attr is not None:
+        value = getattr(subscription, subscription_attr, None)
+        if value:
+            return str(value)
+
+    vpn_config = getattr(subscription, "vpn_config", None) or {}
+    value = vpn_config.get(vpn_config_key)
+    return str(value) if value else "—"
+
+
 def format_node_label(node: XuiNodeConfig) -> str:
     """Format a node label without exposing secret node settings."""
     return escape(getattr(node, "label", None) or node.key)
@@ -929,6 +948,12 @@ async def user_command(
         f"subscription id: <code>{escape(str(active_subscription.id if active_subscription else '—'))}</code>",
         f"expires at: <code>{format_optional_datetime(active_subscription.expires_at if active_subscription else None)}</code>",
         f"xui_email: <code>{escape(active_subscription.xui_email if active_subscription else '—')}</code>",
+        "node_key: "
+        f"<code>{escape(get_subscription_node_detail(active_subscription, 'node_key', 'node_key'))}</code>",
+        "node_label: "
+        f"<code>{escape(get_subscription_node_detail(active_subscription, 'node_label', 'node_label'))}</code>",
+        "node_public_host: "
+        f"<code>{escape(get_subscription_node_detail(active_subscription, 'node_public_host'))}</code>",
         f"connection link exists: <code>{format_yes_no(has_connection_link)}</code>",
         f"early buyer discount percent: <code>{discount_percent}</code>",
         f"pending referral bonus days: <code>{pending_bonus_days}</code>",
