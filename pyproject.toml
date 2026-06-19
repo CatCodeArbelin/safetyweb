@@ -5,18 +5,18 @@ description = "Telegram bot for protected network access subscriptions"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "aiogram",
-    "aiogram-dialog",
+    "aiogram>=3.29,<4",
+    "aiogram-dialog>=2.6,<3",
     "sqlalchemy[asyncio]",
     "asyncpg",
     "alembic",
     "redis",
-    "httpx",
-    "fastapi",
-    "uvicorn",
+    "httpx>=0.28,<0.29",
+    "fastapi>=0.137,<0.138",
+    "uvicorn>=0.49,<0.50",
     "pydantic-settings",
     "python-dateutil",
-    "apscheduler",
+    "APScheduler>=3.11,<4",
 ]
 
 [build-system]
