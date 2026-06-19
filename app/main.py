@@ -99,6 +99,7 @@ class PurchaseState(StatesGroup):
     """FSM states for manual payment requests."""
 
     choosing_tariff = State()
+    choosing_payment_method = State()
     waiting_payment = State()
 
 
@@ -493,6 +494,21 @@ async def recover_orphan_platega_payment(
             )
         await session.commit()
         return payment is not None
+
+
+def platega_payment_methods_keyboard(settings: Settings) -> InlineKeyboardMarkup:
+    """Build inline keyboard for configured Platega payment methods."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=method.title,
+                    callback_data=f"pay_method:{method_key}",
+                )
+            ]
+            for method_key, method in settings.platega_payment_methods_json.items()
+        ]
+    )
 
 
 def payment_request_keyboard(
@@ -1361,8 +1377,7 @@ async def choose_tariff(
     active_subscription = await SubscriptionService().get_active_subscription(
         callback.from_user.id
     )
-    await state.update_data(months=months)
-    await state.set_state(PurchaseState.waiting_payment)
+    await state.update_data(months=months, payment_method_key=None)
     payment_hint = (
         "Тестовый режим включён: оплата не потребуется. "
         "Нажмите кнопку ниже, чтобы получить тестовый доступ."
@@ -1379,21 +1394,66 @@ async def choose_tariff(
     else:
         selection_text = f"Вы выбрали тариф: {selected_tariff}\n\n{payment_hint}"
 
-    await callback.message.answer(
-        selection_text,
-        reply_markup=payment_request_keyboard(months, test_mode=settings.test_mode),
-    )
+    if (
+        settings.payment_provider == PLATEGA_PROVIDER_NAME
+        and settings.platega_payment_methods_json
+        and not settings.test_mode
+    ):
+        await state.set_state(PurchaseState.choosing_payment_method)
+        await callback.message.answer(
+            f"{selection_text}\n\nВыберите способ оплаты:",
+            reply_markup=platega_payment_methods_keyboard(settings),
+        )
+    else:
+        await state.set_state(PurchaseState.waiting_payment)
+        await callback.message.answer(
+            selection_text,
+            reply_markup=payment_request_keyboard(months, test_mode=settings.test_mode),
+        )
     await callback.answer()
+
+
+@router.callback_query(
+    F.data.startswith("pay_method:"), StateFilter(PurchaseState.choosing_payment_method)
+)
+async def choose_payment_method(
+    callback: CallbackQuery, state: FSMContext, bot: Bot, settings: Settings
+) -> None:
+    """Persist the selected Platega payment method and create a payment."""
+    method_key = (callback.data or "").split(":", maxsplit=1)[1].strip()
+    data = await state.get_data()
+    months = int(data.get("months") or 0)
+    if not method_key or method_key not in settings.platega_payment_methods_json:
+        await notify_admins(
+            bot,
+            settings,
+            "Ошибка конфигурации способов оплаты Platega\n"
+            f"Method code: <code>{escape(method_key or '—')}</code>\n"
+            "Причина: <code>код способа оплаты отсутствует в конфигурации</code>",
+        )
+        await callback.answer("Способ оплаты недоступен", show_alert=True)
+        return
+    await state.update_data(payment_method_key=method_key)
+    await state.set_state(PurchaseState.waiting_payment)
+    await create_payment_request(
+        callback, state, bot, settings, months=months, payment_method_key=method_key
+    )
 
 
 @router.callback_query(
     F.data.startswith("pay_request:"), StateFilter(PurchaseState.waiting_payment)
 )
 async def create_payment_request(
-    callback: CallbackQuery, state: FSMContext, bot: Bot, settings: Settings
+    callback: CallbackQuery,
+    state: FSMContext,
+    bot: Bot,
+    settings: Settings,
+    months: int | None = None,
+    payment_method_key: str | None = None,
 ) -> None:
-    """Create a manual payment request and notify admins."""
-    months = int(callback.data.split(":", maxsplit=1)[1]) if callback.data else 0
+    """Create a payment request and notify admins when needed."""
+    if months is None:
+        months = int(callback.data.split(":", maxsplit=1)[1]) if callback.data else 0
     if months not in TARIFFS or callback.from_user is None:
         await callback.answer("Не удалось создать заявку", show_alert=True)
         return
@@ -1483,13 +1543,32 @@ async def create_payment_request(
         base_price, discount_percent, final_price
     )
 
+    if payment_method_key is None:
+        data = await state.get_data()
+        stored_method_key = data.get("payment_method_key")
+        payment_method_key = (
+            str(stored_method_key) if stored_method_key is not None else None
+        )
+
     payment_service = PaymentService(settings=settings)
-    result: PaymentCreateResult = await payment_service.create_payment(
-        user_id=user.id,
-        tariff_id=months,
-        amount=final_price,
-        currency=PAYMENT_CURRENCY,
-    )
+    try:
+        result: PaymentCreateResult = await payment_service.create_payment(
+            user_id=user.id,
+            tariff_id=months,
+            amount=final_price,
+            currency=PAYMENT_CURRENCY,
+            payment_method_key=payment_method_key,
+        )
+    except KeyError:
+        await notify_admins(
+            bot,
+            settings,
+            "Ошибка конфигурации способов оплаты Platega\n"
+            f"Method code: <code>{escape(payment_method_key or '—')}</code>\n"
+            "Причина: <code>код способа оплаты отсутствует в конфигурации</code>",
+        )
+        await callback.answer("Способ оплаты недоступен", show_alert=True)
+        return
     payment = result.payment
     await state.update_data(months=months, payment_id=result.provider_payment_id)
 

@@ -97,6 +97,7 @@ class PaymentProvider(ABC):
         tariff_id: int,
         amount: Decimal | int | str,
         currency: str,
+        payment_method_key: str | None = None,
     ) -> PaymentCreateResult:
         """Create a provider payment and return creation metadata."""
 
@@ -121,6 +122,7 @@ class ManualPaymentProvider(PaymentProvider):
         tariff_id: int,
         amount: Decimal | int | str,
         currency: str,
+        payment_method_key: str | None = None,
     ) -> PaymentCreateResult:
         """Create a pending manual payment for a Telegram user."""
         if self.session is not None:
@@ -260,8 +262,20 @@ class PlategaPaymentProvider(PaymentProvider):
         tariff_id: int,
         amount: Decimal | int | str,
         currency: str,
+        payment_method_key: str | None = None,
     ) -> PaymentCreateResult:
         """Create a local pending payment and initialize a Platega transaction."""
+        configured_method = None
+        if payment_method_key is not None:
+            configured_method = self.settings.get_platega_payment_method(
+                payment_method_key
+            )
+        payment_method = (
+            configured_method.payment_method
+            if configured_method is not None
+            else self.settings.platega_payment_method
+        )
+
         async with async_session_maker() as session:
             user = await ManualPaymentProvider._get_or_create_user(session, user_id)
             description = f"Payment for tariff {tariff_id}"
@@ -289,7 +303,8 @@ class PlategaPaymentProvider(PaymentProvider):
                 "payload": payload,
                 "user_id": user_id,
                 "user_name": str(user_id),
-                "payment_method": self.settings.platega_payment_method,
+                "payment_method": payment_method,
+                "payment_method_key": payment_method_key,
             }
 
             client = self.client or PlategaClient(settings=self.settings)
@@ -303,7 +318,7 @@ class PlategaPaymentProvider(PaymentProvider):
                     payload=payload,
                     user_id=user_id,
                     user_name=str(user_id),
-                    payment_method=self.settings.platega_payment_method,
+                    payment_method=payment_method,
                 )
             except Exception as error:
                 sanitized_error = self._sanitize_error(error)
@@ -560,9 +575,12 @@ class PaymentService:
         tariff_id: int,
         amount: Decimal | int | str,
         currency: str,
+        payment_method_key: str | None = None,
     ) -> PaymentCreateResult:
         """Create a payment through the configured provider."""
-        return await self.provider.create_payment(user_id, tariff_id, amount, currency)
+        return await self.provider.create_payment(
+            user_id, tariff_id, amount, currency, payment_method_key
+        )
 
     async def get_payment_status(self, provider_payment_id: str) -> PaymentStatus:
         """Get payment status from the configured provider."""

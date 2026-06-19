@@ -130,6 +130,23 @@ class XuiNodeConfig(BaseModel):
         return inbound_ids
 
 
+class PlategaPaymentMethodConfig(BaseModel):
+    """Configuration for one selectable Platega payment method."""
+
+    title: str
+    payment_method: str
+
+    @field_validator("title", "payment_method")
+    @classmethod
+    def validate_not_empty(cls, value: str) -> str:
+        """Validate display title and Platega payment method are not empty."""
+        normalized = value.strip()
+        if not normalized:
+            msg = "Platega payment method title and payment_method must not be empty"
+            raise ValueError(msg)
+        return normalized
+
+
 class Settings(BaseSettings):
     """Runtime settings loaded from environment variables."""
 
@@ -195,6 +212,12 @@ class Settings(BaseSettings):
     platega_api_key: SecretStr | None = None
     platega_callback_secret: SecretStr | None = None
     platega_payment_method: str | None = None
+    platega_payment_methods_json: Annotated[
+        dict[str, PlategaPaymentMethodConfig], NoDecode
+    ] = Field(
+        default_factory=dict,
+        repr=False,
+    )
     platega_return_url: str | None = None
     platega_failed_url: str | None = None
     platega_callback_path: str = "/payments/platega/callback"
@@ -301,6 +324,34 @@ class Settings(BaseSettings):
             raise TypeError(msg)
         return parsed
 
+    @field_validator("platega_payment_methods_json", mode="before")
+    @classmethod
+    def parse_platega_payment_methods_json(
+        cls,
+        value: str | dict[str, dict[str, object]] | None,
+    ) -> dict[str, dict[str, object]]:
+        """Parse PLATEGA_PAYMENT_METHODS_JSON from a JSON object keyed by method code."""
+        if value is None or value == "":
+            return {}
+        if isinstance(value, str):
+            parsed = json.loads(value)
+        else:
+            parsed = value
+        if not isinstance(parsed, dict):
+            msg = "PLATEGA_PAYMENT_METHODS_JSON must be a JSON object"
+            raise TypeError(msg)
+        normalized: dict[str, dict[str, object]] = {}
+        for key, method in parsed.items():
+            normalized_key = str(key).strip()
+            if not normalized_key:
+                msg = "PLATEGA_PAYMENT_METHODS_JSON method codes must not be empty"
+                raise ValueError(msg)
+            if not isinstance(method, dict):
+                msg = "PLATEGA_PAYMENT_METHODS_JSON method definitions must be objects"
+                raise TypeError(msg)
+            normalized[normalized_key] = method
+        return normalized
+
     @field_validator("admin_ids", mode="before")
     @classmethod
     def parse_admin_ids(cls, value: str | list[int] | list[str] | None) -> list[int]:
@@ -359,6 +410,18 @@ class Settings(BaseSettings):
                 xui_inbound_ids=self.xui_inbound_ids,
             ),
         ]
+
+    def get_platega_payment_method(self, key: str) -> PlategaPaymentMethodConfig:
+        """Return a configured Platega payment method by UI key."""
+        normalized = key.strip()
+        if not normalized:
+            msg = "Platega payment method code must not be empty"
+            raise ValueError(msg)
+        try:
+            return self.platega_payment_methods_json[normalized]
+        except KeyError as error:
+            msg = f"Platega payment method code is not configured: {normalized}"
+            raise KeyError(msg) from error
 
     def get_xui_node(self, key: str) -> XuiNodeConfig:
         """Return an X-UI node by key."""
