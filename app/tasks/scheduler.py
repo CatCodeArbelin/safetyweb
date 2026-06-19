@@ -97,6 +97,7 @@ async def process_pending_payment_webhooks(
         events = await repository.get_retryable_webhook_events(
             provider=PLATEGA_PROVIDER_NAME,
             now=now,
+            max_attempts=app_settings.platega_webhook_max_attempts,
         )
 
     service = PlategaWebhookService(settings=app_settings, bot=bot)
@@ -120,7 +121,7 @@ async def process_pending_payment_webhooks(
             bot=bot,
             settings=app_settings,
             event_id=event.id,
-            max_retries=app_settings.platega_webhook_max_retries,
+            max_attempts=app_settings.platega_webhook_max_attempts,
             attempt_count=attempt_count,
         )
 
@@ -130,11 +131,11 @@ async def _mark_webhook_dead_if_exhausted(
     bot: Bot,
     settings: Settings,
     event_id: int,
-    max_retries: int,
+    max_attempts: int,
     attempt_count: int,
 ) -> None:
     """Move a failed webhook event to dead state after retry exhaustion."""
-    if attempt_count < max_retries:
+    if attempt_count < max_attempts:
         return
 
     async with async_session_maker() as session:

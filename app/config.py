@@ -196,7 +196,13 @@ class Settings(BaseSettings):
     platega_test_mode: bool = False
     platega_reconcile_interval_seconds: int = 300
     platega_webhook_retry_interval_seconds: int = 60
-    platega_webhook_max_retries: int = 5
+    platega_webhook_max_attempts: int = Field(
+        default=5,
+        validation_alias=AliasChoices(
+            "platega_webhook_max_attempts",
+            "platega_webhook_max_retries",
+        ),
+    )
 
     @field_validator("payment_provider", mode="before")
     @classmethod
