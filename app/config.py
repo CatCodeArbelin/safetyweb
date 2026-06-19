@@ -12,6 +12,8 @@ class XuiNodeConfig(BaseModel):
     """Configuration for a single X-UI node."""
 
     key: str
+    enabled: bool = True
+    max_active_subscriptions: int | None = None
     xui_base_url: str = "http://localhost:2053"
     xui_public_host: str | None = None
     xui_sub_base_url: str | None = None
@@ -29,6 +31,15 @@ class XuiNodeConfig(BaseModel):
             msg = "X-UI node key must not be empty"
             raise ValueError(msg)
         return normalized
+
+    @field_validator("max_active_subscriptions")
+    @classmethod
+    def validate_max_active_subscriptions(cls, value: int | None) -> int | None:
+        """Validate node capacity limit is positive when configured."""
+        if value is not None and value <= 0:
+            msg = "max_active_subscriptions must be positive"
+            raise ValueError(msg)
+        return value
 
     @field_validator("xui_inbound_ids", mode="before")
     @classmethod
