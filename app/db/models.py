@@ -276,6 +276,10 @@ class Subscription(Base):
     xui_client_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     xui_email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     inbound_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    node_key: Mapped[str] = mapped_column(
+        String(255), default="default", server_default="default", nullable=False
+    )
+    node_label: Mapped[str | None] = mapped_column(String(255))
     traffic_limit_gb: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )

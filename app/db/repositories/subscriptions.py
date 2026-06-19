@@ -61,6 +61,8 @@ class SubscriptionRepository:
         expires_at: datetime,
         traffic_limit_gb: int,
         vpn_config: dict,
+        node_key: str = "default",
+        node_label: str | None = None,
     ) -> Subscription:
         """Create an active subscription record."""
         existing = await self.get_active_by_telegram_id(user.telegram_id)
@@ -80,6 +82,8 @@ class SubscriptionRepository:
             expires_at=expires_at,
             traffic_limit_gb=traffic_limit_gb,
             vpn_config=vpn_config,
+            node_key=node_key,
+            node_label=node_label,
         )
         self.session.add(subscription)
         await self.session.flush()
