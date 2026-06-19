@@ -88,9 +88,21 @@ class VpnService:
         """Return non-secret node metadata persisted with subscription diagnostics."""
         return {
             "node_key": node.key,
-            "node_label": node.key,
+            "node_label": node.name or node.key,
             "node_public_host": node.xui_public_host,
         }
+
+    def _node_default_traffic_gb(self, node: XuiNodeConfig) -> int:
+        """Return per-node or global default traffic limit in GiB."""
+        if node.default_traffic_gb is not None:
+            return node.default_traffic_gb
+        return self.settings.xui_default_traffic_gb
+
+    def _node_default_limit_ip(self, node: XuiNodeConfig) -> int:
+        """Return per-node or global default IP limit."""
+        if node.default_limit_ip is not None:
+            return node.default_limit_ip
+        return self.settings.xui_default_limit_ip
 
     async def create_client(self, telegram_id: int, months: int) -> str:
         """Create or extend a paid subscription and return its connection link."""
@@ -120,9 +132,9 @@ class VpnService:
             )
 
         async with async_session_maker() as session:
-            subscription = await SubscriptionRepository(session).get_active_by_telegram_id(
-                telegram_id
-            )
+            subscription = await SubscriptionRepository(
+                session
+            ).get_active_by_telegram_id(telegram_id)
             if subscription is not None:
                 result = await self._extend_active_subscription(
                     session,
@@ -136,8 +148,6 @@ class VpnService:
                 )
             await session.commit()
             return result
-
-
 
     async def provision_trial_client(
         self,
@@ -159,9 +169,9 @@ class VpnService:
             return await self._create_trial_client(self.session, telegram_id, hours)
 
         async with async_session_maker() as session:
-            subscription = await SubscriptionRepository(session).get_active_by_telegram_id(
-                telegram_id
-            )
+            subscription = await SubscriptionRepository(
+                session
+            ).get_active_by_telegram_id(telegram_id)
             if subscription is not None:
                 msg = f"Telegram user {telegram_id} already has an active subscription"
                 raise ValueError(msg)
@@ -185,18 +195,22 @@ class VpnService:
                 self.session
             ).get_active_by_telegram_id(telegram_id)
             if subscription is None:
-                msg = f"Active subscription for Telegram user {telegram_id} was not found"
+                msg = (
+                    f"Active subscription for Telegram user {telegram_id} was not found"
+                )
                 raise NoActiveSubscriptionError(msg)
             return await self._extend_active_subscription_by_days(
                 self.session, subscription, days, reason
             )
 
         async with async_session_maker() as session:
-            subscription = await SubscriptionRepository(session).get_active_by_telegram_id(
-                telegram_id
-            )
+            subscription = await SubscriptionRepository(
+                session
+            ).get_active_by_telegram_id(telegram_id)
             if subscription is None:
-                msg = f"Active subscription for Telegram user {telegram_id} was not found"
+                msg = (
+                    f"Active subscription for Telegram user {telegram_id} was not found"
+                )
                 raise NoActiveSubscriptionError(msg)
             result = await self._extend_active_subscription_by_days(
                 session, subscription, days, reason
@@ -242,7 +256,11 @@ class VpnService:
         vpn_config["expires_at"] = expires_at.isoformat()
         vpn_config.update(self._node_vpn_config(node))
         vpn_config.setdefault("extension_reasons", []).append(
-            {"reason": reason, "days": days, "created_at": datetime.now(UTC).isoformat()}
+            {
+                "reason": reason,
+                "days": days,
+                "created_at": datetime.now(UTC).isoformat(),
+            }
         )
         connection_link = self._existing_connection_link(vpn_config)
         vpn_config["connection_link"] = connection_link
@@ -280,19 +298,20 @@ class VpnService:
         email = sub_id
         expires_at = now + timedelta(hours=hours)
         expiry_ms = int(expires_at.timestamp() * 1000)
-        total_bytes = self.settings.xui_default_traffic_gb * 1024**3
+        node = await self._node_selector(session).select_node_for_new_subscription()
+        traffic_limit_gb = self._node_default_traffic_gb(node)
+        total_bytes = traffic_limit_gb * 1024**3
         client_payload = {
             "id": client_id,
             "email": email,
             "subId": sub_id,
             "tgId": telegram_id,
             "expiryTime": expiry_ms,
-            "limitIp": self.settings.xui_default_limit_ip,
+            "limitIp": self._node_default_limit_ip(node),
             "totalGB": total_bytes,
             "enable": True,
         }
 
-        node = await self._node_selector(session).select_node_for_new_subscription()
         inbound_ids = node.xui_inbound_ids
         primary_inbound_id = inbound_ids[0]
 
@@ -317,7 +336,9 @@ class VpnService:
             async with self._xui_client_for_node(node) as xui_client:
                 inbound_response = await xui_client.get_inbound(primary_inbound_id)
             provisioned_client = self._find_inbound_client(inbound_response, email)
-            provisioned_client_id = self._extract_client_secret(provisioned_client, email)
+            provisioned_client_id = self._extract_client_secret(
+                provisioned_client, email
+            )
             inbound = self._extract_inbound_object(inbound_response)
             protocol = inbound.get("protocol")
             settings = self._extract_inbound_settings(inbound_response)
@@ -341,9 +362,9 @@ class VpnService:
             xui_email=email,
             inbound_id=primary_inbound_id,
             expires_at=expires_at,
-            traffic_limit_gb=self.settings.xui_default_traffic_gb,
+            traffic_limit_gb=traffic_limit_gb,
             node_key=node.key,
-            node_label=node.key,
+            node_label=node.name or node.key,
             vpn_config={
                 "email": email,
                 **self._node_vpn_config(node),
@@ -399,19 +420,20 @@ class VpnService:
         email = sub_id
         expires_at = datetime.now(UTC) + relativedelta(months=months)
         expiry_ms = int(expires_at.timestamp() * 1000)
-        total_bytes = self.settings.xui_default_traffic_gb * 1024**3
+        node = await self._node_selector(session).select_node_for_new_subscription()
+        traffic_limit_gb = self._node_default_traffic_gb(node)
+        total_bytes = traffic_limit_gb * 1024**3
         client_payload = {
             "id": client_id,
             "email": email,
             "subId": sub_id,
             "tgId": telegram_id,
             "expiryTime": expiry_ms,
-            "limitIp": self.settings.xui_default_limit_ip,
+            "limitIp": self._node_default_limit_ip(node),
             "totalGB": total_bytes,
             "enable": True,
         }
 
-        node = await self._node_selector(session).select_node_for_new_subscription()
         inbound_ids = node.xui_inbound_ids
         primary_inbound_id = inbound_ids[0]
 
@@ -475,9 +497,9 @@ class VpnService:
             xui_email=email,
             inbound_id=primary_inbound_id,
             expires_at=expires_at,
-            traffic_limit_gb=self.settings.xui_default_traffic_gb,
+            traffic_limit_gb=traffic_limit_gb,
             node_key=node.key,
-            node_label=node.key,
+            node_label=node.name or node.key,
             vpn_config={
                 "email": email,
                 **self._node_vpn_config(node),
@@ -614,11 +636,7 @@ class VpnService:
                 return value
 
         sub_id = vpn_config.get("subId")
-        if (
-            isinstance(sub_id, str)
-            and sub_id
-            and self.settings.xui_sub_base_url
-        ):
+        if isinstance(sub_id, str) and sub_id and self.settings.xui_sub_base_url:
             return self._build_subscription_url(self.settings.xui_sub_base_url, sub_id)
 
         msg = "Active subscription does not contain a reusable connection link"

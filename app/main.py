@@ -378,7 +378,7 @@ def get_subscription_node_detail(
 
 def format_node_label(node: XuiNodeConfig) -> str:
     """Format a node label without exposing secret node settings."""
-    return escape(getattr(node, "label", None) or node.key)
+    return escape(node.name or node.key)
 
 
 def format_node_inbound_ids(inbound_ids: list[int]) -> str:
