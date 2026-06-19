@@ -15,15 +15,19 @@ from app.db.models import (
     PaymentWebhookHandlingState,
 )
 
-WEBHOOK_RETRY_DELAYS_SECONDS = (60, 300, 900, 3600, 10800)
+DEFAULT_WEBHOOK_RETRY_BASE_SECONDS = 30
+DEFAULT_WEBHOOK_RETRY_MAX_SECONDS = 900
 
 
-def webhook_retry_delay_seconds(attempt_count: int) -> int:
-    """Return retry backoff delay for a webhook attempt count."""
-    if attempt_count <= 0:
-        return WEBHOOK_RETRY_DELAYS_SECONDS[0]
-    index = min(attempt_count - 1, len(WEBHOOK_RETRY_DELAYS_SECONDS) - 1)
-    return WEBHOOK_RETRY_DELAYS_SECONDS[index]
+def webhook_retry_delay_seconds(
+    attempt_count: int,
+    *,
+    base_seconds: int = DEFAULT_WEBHOOK_RETRY_BASE_SECONDS,
+    max_seconds: int = DEFAULT_WEBHOOK_RETRY_MAX_SECONDS,
+) -> int:
+    """Return exponential retry backoff delay for a webhook attempt count."""
+    normalized_attempt_count = max(attempt_count, 1)
+    return min(base_seconds * (2 ** (normalized_attempt_count - 1)), max_seconds)
 
 
 class PaymentRepository:
@@ -335,7 +339,13 @@ class PaymentRepository:
         return event
 
     async def mark_webhook_failed(
-        self, webhook_event_id: int, last_error: str, last_http_status: int | None = None
+        self,
+        webhook_event_id: int,
+        last_error: str,
+        last_http_status: int | None = None,
+        *,
+        retry_base_seconds: int = DEFAULT_WEBHOOK_RETRY_BASE_SECONDS,
+        retry_max_seconds: int = DEFAULT_WEBHOOK_RETRY_MAX_SECONDS,
     ) -> PaymentWebhookEvent | None:
         """Mark a webhook event as failed and schedule the next retry."""
         event = await self.session.get(PaymentWebhookEvent, webhook_event_id)
@@ -346,7 +356,11 @@ class PaymentRepository:
         event.last_http_status = last_http_status
         if event.last_attempt_at is not None:
             event.next_retry_at = event.last_attempt_at + timedelta(
-                seconds=webhook_retry_delay_seconds(event.attempt_count)
+                seconds=webhook_retry_delay_seconds(
+                    event.attempt_count,
+                    base_seconds=retry_base_seconds,
+                    max_seconds=retry_max_seconds,
+                )
             )
         await self.session.flush()
         return event

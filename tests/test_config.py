@@ -141,3 +141,16 @@ def test_get_xui_node_validates_key_and_missing_nodes() -> None:
         settings.get_xui_node(" ")
     with pytest.raises(KeyError):
         settings.get_xui_node("missing")
+
+
+def test_platega_webhook_retry_settings_and_legacy_alias() -> None:
+    settings = Settings(
+        **_settings_kwargs(),
+        platega_webhook_max_retries=7,
+        platega_webhook_retry_base_seconds=45,
+        platega_webhook_retry_max_seconds=600,
+    )
+
+    assert settings.platega_webhook_max_attempts == 7
+    assert settings.platega_webhook_retry_base_seconds == 45
+    assert settings.platega_webhook_retry_max_seconds == 600

@@ -203,6 +203,8 @@ class Settings(BaseSettings):
             "platega_webhook_max_retries",
         ),
     )
+    platega_webhook_retry_base_seconds: int = 30
+    platega_webhook_retry_max_seconds: int = 900
 
     @field_validator("payment_provider", mode="before")
     @classmethod
