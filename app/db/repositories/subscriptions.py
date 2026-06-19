@@ -33,6 +33,17 @@ class SubscriptionRepository:
             .limit(1)
         )
 
+    async def get_latest_by_telegram_id(self, telegram_id: int) -> Subscription | None:
+        """Return the latest subscription for a Telegram user regardless of status."""
+        return await self.session.scalar(
+            select(Subscription)
+            .join(Subscription.user)
+            .where(User.telegram_id == telegram_id)
+            .order_by(Subscription.created_at.desc(), Subscription.id.desc())
+            .options(selectinload(Subscription.user))
+            .limit(1)
+        )
+
     async def get_by_last_payment_id(
         self, telegram_id: int, provider_payment_id: str
     ) -> Subscription | None:
