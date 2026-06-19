@@ -115,9 +115,6 @@ def create_app(settings: Settings | None = None, bot: Bot | None = None) -> Fast
     return app
 
 
-app = create_app()
-
-
 async def _json_payload(request: Request) -> dict[str, Any]:
     try:
         payload = await request.json()
