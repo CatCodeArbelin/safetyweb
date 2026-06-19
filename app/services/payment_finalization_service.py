@@ -64,10 +64,19 @@ class PaymentFinalizationService:
             provider_data = dict(payment.provider_data or {})
 
             if payment.subscription_id is not None:
-                subscription = await session.get(Subscription, payment.subscription_id)
-                provision_result = None
-                if subscription is not None:
-                    provision_result = VpnService.provision_result_from_subscription(subscription)
+                if not provider_data.get("user_notified_at"):
+                    subscription = await session.get(Subscription, payment.subscription_id)
+                    if subscription is None:
+                        subscription = await SubscriptionRepository(
+                            session
+                        ).get_by_last_payment_id(
+                            payment.user.telegram_id,
+                            provider_payment_id,
+                        )
+                    if subscription is not None:
+                        provision_result = VpnService.provision_result_from_subscription(
+                            subscription
+                        )
                 await session.commit()
                 await self._notify_user_once(
                     payment,
@@ -281,7 +290,7 @@ class PaymentFinalizationService:
         provision_result: ProvisionResult | None,
         status: str,
     ) -> None:
-        if self.bot is None or status == "already_finalized":
+        if self.bot is None:
             return
         provider_data = dict(payment.provider_data or {})
         if provider_data.get("user_notified_at"):
@@ -294,7 +303,12 @@ class PaymentFinalizationService:
             status,
             payment.tariff_months,
         )
-        await self.bot.send_message(payment.user.telegram_id, text)
+        notified_at = datetime.now(tz=UTC)
+        notify_error: str | None = None
+        try:
+            await self.bot.send_message(payment.user.telegram_id, text)
+        except Exception as error:
+            notify_error = self._sanitize_finalization_error(error)
 
         async with async_session_maker() as session:
             stored_payment = await PaymentRepository(
@@ -308,10 +322,25 @@ class PaymentFinalizationService:
             stored_data = dict(stored_payment.provider_data or {})
             if stored_data.get("user_notified_at"):
                 return
-            stored_data["user_notified_at"] = datetime.now(tz=UTC).isoformat()
+            if notify_error is None:
+                stored_data["user_notified_at"] = notified_at.isoformat()
+                stored_data.pop("user_notify_error", None)
+                stored_data.pop("user_notify_failed_at", None)
+            else:
+                stored_data["user_notify_error"] = notify_error
+                stored_data["user_notify_failed_at"] = notified_at.isoformat()
             stored_payment.provider_data = stored_data
             payment.provider_data = stored_data
             await session.commit()
+
+        if notify_error is not None:
+            await self._notify_admins_safely(
+                "Ошибка отправки уведомления пользователю после финализации платежа\n"
+                f"Provider: <code>{escape(payment.provider)}</code>\n"
+                f"Payment: <code>{escape(payment.provider_payment_id or '')}</code>\n"
+                f"User: <code>{payment.user.telegram_id}</code>\n"
+                f"Error: <code>{escape(notify_error)}</code>"
+            )
 
     @staticmethod
     def _build_user_notification(
@@ -416,6 +445,12 @@ class PaymentFinalizationService:
                 f"Ошибка: <code>{escape(str(error))}</code>",
             )
             return []
+
+    async def _notify_admins_safely(self, text: str) -> None:
+        try:
+            await self._notify_admins(text)
+        except Exception:
+            return
 
     async def _notify_admins(self, text: str) -> None:
         if self.bot is None:
