@@ -27,10 +27,17 @@ from aiogram.types import (
 from app.config import Settings
 from app.http_app import create_app
 from app.db.repositories import SubscriptionRepository, UserRepository
+from app.db.repositories.payments import PaymentRepository
 from app.db.session import async_session_maker
 from app.services.benefit_service import BenefitService
 from app.services.payment_finalization_service import PaymentFinalizationService
-from app.services.payment_service import PaymentCreateResult, PaymentService
+from app.services.payment_service import (
+    PLATEGA_PROVIDER_NAME,
+    PaymentCreateResult,
+    PaymentService,
+)
+from app.services.platega_client import PlategaClient
+from app.services.platega_webhook_service import PlategaWebhookService
 from app.services.referral_service import ReferralService
 from app.services.stats_service import AdminStats, StatsService
 from app.services.subscription_service import SubscriptionService
@@ -308,6 +315,72 @@ def format_admin_stats(stats: AdminStats, early_buyer_limit: int) -> str:
     )
 
 
+def format_admin_payment_details(
+    *,
+    provider: str,
+    provider_payment_id: str,
+    local_status: str | None,
+    amount: Decimal | int | str | None,
+    currency: str | None,
+    tariff_months: int | None,
+    telegram_id: int | None,
+    subscription_id: int | None,
+    provider_expires_at: datetime | None,
+    provider_status: str | None = None,
+    header: str = "💳 Проверка платежа",
+) -> str:
+    """Format safe payment diagnostics for administrators."""
+    amount_text = "—" if amount is None else str(amount)
+    expires_text = (
+        "—"
+        if provider_expires_at is None
+        else provider_expires_at.strftime("%Y-%m-%d %H:%M:%S %Z")
+    )
+    lines = [
+        header,
+        f"provider: <code>{escape(provider)}</code>",
+        f"provider_payment_id: <code>{escape(provider_payment_id)}</code>",
+        f"local status: <code>{escape(str(local_status or '—'))}</code>",
+        f"amount/currency: <code>{escape(amount_text)} {escape(currency or '—')}</code>",
+        f"tariff_months: <code>{escape(str(tariff_months or '—'))}</code>",
+        f"user telegram id: <code>{escape(str(telegram_id or '—'))}</code>",
+        f"subscription_id: <code>{escape(str(subscription_id or '—'))}</code>",
+        f"provider_expires_at: <code>{escape(expires_text)}</code>",
+    ]
+    if provider_status is not None:
+        lines.append(f"provider status: <code>{escape(provider_status)}</code>")
+    return "\n".join(lines)
+
+
+async def recover_orphan_platega_payment(
+    provider_payment_id: str,
+    transaction: dict,
+    service: PlategaWebhookService,
+) -> bool:
+    """Try to create/attach a local Platega payment from provider metadata."""
+    recovery_payload = service._extract_recovery_payload(transaction, None)
+    if not recovery_payload:
+        return False
+
+    async with async_session_maker() as session:
+        repository = PaymentRepository(session)
+        payment = await service._recover_payment_by_internal_id(
+            repository,
+            provider_payment_id,
+            recovery_payload,
+            transaction,
+        )
+        if payment is None:
+            payment = await service._create_recovery_payment(
+                repository,
+                provider_payment_id,
+                recovery_payload,
+                transaction,
+            )
+        await session.commit()
+        return payment is not None
+
+
 def payment_request_keyboard(months: int, test_mode: bool = False) -> InlineKeyboardMarkup:
     """Build inline keyboard for submitting a payment or test access request."""
     button_text = "🧪 Получить тестовый доступ" if test_mode else "💳 Создать заявку на оплату"
@@ -479,6 +552,132 @@ async def stats_command(message: Message, settings: Settings) -> None:
 
     stats = await StatsService().get_admin_stats()
     await message.answer(format_admin_stats(stats, settings.early_buyer_limit))
+
+
+@router.message(Command("check_payment", "payment"))
+async def check_payment_command(
+    message: Message,
+    command: CommandObject,
+    settings: Settings,
+) -> None:
+    """Check and reconcile a provider payment by id for administrators."""
+    if message.from_user is None or message.from_user.id not in settings.admin_ids:
+        await message.answer("Недостаточно прав.")
+        return
+
+    provider_payment_id = (command.args or "").strip()
+    if not provider_payment_id:
+        await message.answer(
+            "Использование: <code>/check_payment &lt;provider_payment_id&gt;</code>\n"
+            "Alias: <code>/payment &lt;provider_payment_id&gt;</code>"
+        )
+        return
+
+    async with async_session_maker() as session:
+        payment = await PaymentRepository(session).get_by_provider_payment_id_any_provider(
+            provider_payment_id
+        )
+
+    service = PlategaWebhookService(settings=settings, bot=message.bot)
+    if payment is not None:
+        provider_status = None
+        if payment.provider == PLATEGA_PROVIDER_NAME:
+            client = PlategaClient(settings=settings)
+            try:
+                transaction = await client.get_transaction(provider_payment_id)
+            finally:
+                await client.close()
+            provider_status = service._extract_transaction_status(transaction) or "—"
+            processed = await service.process_transaction_status(
+                provider_payment_id,
+                provider_status,
+                months=payment.tariff_months,
+                status_reason_prefix="Admin payment check",
+                transaction=transaction,
+            )
+            if processed:
+                async with async_session_maker() as session:
+                    payment = await PaymentRepository(
+                        session
+                    ).get_by_provider_payment_id_any_provider(provider_payment_id)
+
+        await message.answer(
+            format_admin_payment_details(
+                provider=payment.provider,
+                provider_payment_id=provider_payment_id,
+                local_status=str(payment.status),
+                amount=payment.amount,
+                currency=payment.currency,
+                tariff_months=payment.tariff_months,
+                telegram_id=payment.user.telegram_id if payment.user else None,
+                subscription_id=payment.subscription_id,
+                provider_expires_at=payment.provider_expires_at,
+                provider_status=provider_status,
+            )
+        )
+        return
+
+    client = PlategaClient(settings=settings)
+    try:
+        transaction = await client.get_transaction(provider_payment_id)
+    except Exception as error:
+        await message.answer(
+            "Локальный платеж не найден.\n"
+            "Platega transaction recovery невозможен: "
+            f"<code>{escape(str(error))}</code>"
+        )
+        return
+    finally:
+        await client.close()
+
+    recovered = await recover_orphan_platega_payment(
+        provider_payment_id,
+        transaction,
+        service,
+    )
+    if not recovered:
+        provider_status = service._extract_transaction_status(transaction) or "—"
+        await message.answer(
+            "Локальный платеж не найден.\n"
+            "Platega transaction получен, но orphan recovery невозможен.\n"
+            f"provider status: <code>{escape(provider_status)}</code>"
+        )
+        return
+
+    provider_status = service._extract_transaction_status(transaction) or "—"
+    await service.process_transaction_status(
+        provider_payment_id,
+        provider_status,
+        status_reason_prefix="Admin orphan payment recovery",
+        transaction=transaction,
+    )
+    async with async_session_maker() as session:
+        payment = await PaymentRepository(session).get_by_provider_payment_id_any_provider(
+            provider_payment_id
+        )
+
+    if payment is None:
+        await message.answer(
+            "Platega transaction recovery выполнен, но локальный платеж не найден "
+            "после повторной загрузки."
+        )
+        return
+
+    await message.answer(
+        format_admin_payment_details(
+            provider=payment.provider,
+            provider_payment_id=provider_payment_id,
+            local_status=str(payment.status),
+            amount=payment.amount,
+            currency=payment.currency,
+            tariff_months=payment.tariff_months,
+            telegram_id=payment.user.telegram_id if payment.user else None,
+            subscription_id=payment.subscription_id,
+            provider_expires_at=payment.provider_expires_at,
+            provider_status=provider_status,
+            header="💳 Platega orphan recovery",
+        )
+    )
 
 
 @router.message(Command("add_days"))
