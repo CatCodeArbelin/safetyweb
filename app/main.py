@@ -1554,21 +1554,6 @@ async def custom_servers_support(callback: CallbackQuery, settings: Settings) ->
     await callback.answer()
 
 
-@router.callback_query(F.data == "custom_servers:back")
-async def custom_servers_back(callback: CallbackQuery, settings: Settings) -> None:
-    """Return to the custom server section intro."""
-    if not settings.custom_servers_enabled:
-        await callback.message.answer(custom_servers_disabled_text())
-        await callback.answer()
-        return
-
-    await callback.message.answer(
-        custom_servers_intro_text(),
-        reply_markup=custom_servers_keyboard(),
-    )
-    await callback.answer()
-
-
 @router.message(Command("invite"))
 @router.message(F.text == BTN_INVITE_FRIEND)
 async def invite_friend(message: Message, settings: Settings) -> None:
