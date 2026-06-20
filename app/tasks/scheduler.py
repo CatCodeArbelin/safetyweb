@@ -257,10 +257,12 @@ async def expire_subscriptions(bot: Bot, settings: Settings | None = None) -> No
                 )
                 continue
 
+            is_trial = _is_trial_subscription(subscription)
             _mark_deprovision_success(
                 subscription,
                 now=now,
-                policy=app_settings.xui_expired_client_policy,
+                policy="delete" if is_trial else app_settings.xui_expired_client_policy,
+                trial_deleted=is_trial,
             )
             subscription.status = SubscriptionStatus.EXPIRED
             subscription.disabled_at = now
@@ -311,11 +313,14 @@ def _mark_deprovision_success(
     *,
     now: datetime,
     policy: str,
+    trial_deleted: bool = False,
 ) -> None:
     vpn_config = dict(subscription.vpn_config or {})
     vpn_config["deprovisioned_at"] = now.isoformat()
     vpn_config["deprovision_policy"] = policy
     vpn_config["node_slot_released"] = True
+    if trial_deleted:
+        vpn_config["trial_deleted_at"] = now.isoformat()
     subscription.vpn_config = vpn_config
 
 
@@ -406,16 +411,19 @@ async def _deprovision_subscription_client(
         await xui_client.close()
 
 
+def _is_trial_subscription(subscription: Subscription) -> bool:
+    vpn_config = subscription.vpn_config or {}
+    return vpn_config.get("access_type") == "trial" or str(
+        getattr(subscription, "xui_email", "") or ""
+    ).startswith("trial_tg_")
+
+
 async def _deprovision_client(
     subscription: Subscription,
     xui_client: XuiClient,
     settings: Settings,
 ) -> None:
-    vpn_config = subscription.vpn_config or {}
-    is_trial = vpn_config.get("access_type") == "trial" or str(
-        subscription.xui_email or ""
-    ).startswith("trial_tg_")
-    if is_trial:
+    if _is_trial_subscription(subscription):
         await xui_client.delete_client(
             subscription.inbound_id, subscription.xui_client_id
         )
