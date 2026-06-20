@@ -12,7 +12,10 @@ os.environ.setdefault("XUI_PASSWORD", "xui-password")
 os.environ.setdefault("XUI_INBOUND_IDS", "1")
 
 from app.config import Settings
-from app.services.node_selector_service import NodeSelectorService
+from app.services.node_selector_service import (
+    NodeSelectorService,
+    acquire_capacity_selection_lock,
+)
 
 
 def _settings_with_nodes() -> Settings:
@@ -72,7 +75,9 @@ class FakeResult:
 
 
 class FakeSession:
-    async def execute(self, statement: object) -> FakeResult:
+    async def execute(
+        self, statement: object, parameters: dict[str, int] | None = None
+    ) -> FakeResult:
         statement_text = str(statement)
         if "pg_advisory_xact_lock" in statement_text:
             return FakeResult([])
@@ -93,6 +98,28 @@ class FakeSession:
                 ("unlimited", 3),
             ])
         raise AssertionError(f"Unexpected statement: {statement_text}")
+
+
+class CapturingSession:
+    def __init__(self) -> None:
+        self.statement: object | None = None
+        self.parameters: dict[str, int] | None = None
+
+    async def execute(
+        self, statement: object, parameters: dict[str, int] | None = None
+    ) -> FakeResult:
+        self.statement = statement
+        self.parameters = parameters
+        return FakeResult([])
+
+
+def test_acquire_capacity_selection_lock_uses_advisory_xact_lock_keys() -> None:
+    session = CapturingSession()
+
+    asyncio.run(acquire_capacity_selection_lock(session))
+
+    assert str(session.statement) == "SELECT pg_advisory_xact_lock(:k1, :k2)"
+    assert session.parameters == {"k1": 947201, "k2": 1}
 
 
 @dataclass
