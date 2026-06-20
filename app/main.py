@@ -597,7 +597,7 @@ def format_admin_payment_details(
 
 def platega_lookup_credentials_configured(settings: Settings) -> bool:
     """Return whether Platega lookup can be attempted with configured credentials."""
-    return bool(settings.platega_merchant_id and settings.platega_api_key is not None)
+    return bool(settings.platega_merchant_id and settings.platega_api_key)
 
 
 def platega_lookup_not_configured_message() -> str:
