@@ -52,7 +52,7 @@ def create_scheduler(
     scheduler.add_job(
         expire_subscriptions,
         "interval",
-        hours=1,
+        minutes=5,
         id=EXPIRATION_JOB_ID,
         replace_existing=True,
         kwargs={"bot": bot, "settings": app_settings},
