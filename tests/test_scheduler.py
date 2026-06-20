@@ -473,6 +473,43 @@ async def test_deprovision_subscription_client_uses_subscription_node_and_closes
     assert FakeExpiryXuiClient.closed_nodes == ["node-b"]
 
 
+def test_mark_deprovision_success_records_trial_delete_policy() -> None:
+    now = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    subscription = SimpleNamespace(vpn_config={"access_type": "trial"})
+
+    scheduler_module._mark_deprovision_success(
+        subscription,
+        now=now,
+        policy="delete",
+        trial_deleted=scheduler_module._is_trial_subscription(subscription),
+    )
+
+    assert subscription.vpn_config["deprovisioned_at"] == now.isoformat()
+    assert subscription.vpn_config["deprovision_policy"] == "delete"
+    assert subscription.vpn_config["node_slot_released"] is True
+    assert subscription.vpn_config["trial_deleted_at"] == now.isoformat()
+
+
+def test_mark_deprovision_success_keeps_paid_policy_without_trial_deleted_at() -> None:
+    now = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    subscription = SimpleNamespace(
+        xui_email="paid@example.test",
+        vpn_config={"client": {"id": "paid-client"}},
+    )
+
+    scheduler_module._mark_deprovision_success(
+        subscription,
+        now=now,
+        policy="disable",
+        trial_deleted=scheduler_module._is_trial_subscription(subscription),
+    )
+
+    assert subscription.vpn_config["deprovisioned_at"] == now.isoformat()
+    assert subscription.vpn_config["deprovision_policy"] == "disable"
+    assert subscription.vpn_config["node_slot_released"] is True
+    assert "trial_deleted_at" not in subscription.vpn_config
+
+
 @pytest.mark.anyio
 async def test_expire_subscriptions_records_deprovision_failure_and_continues(
     monkeypatch,
