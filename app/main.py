@@ -324,11 +324,13 @@ def format_capacity_snapshot(snapshot: list[NodeCapacityInfo]) -> str:
         )
         status = "enabled" if item.enabled else "disabled"
         capacity = "available" if item.has_capacity else "full"
-        title = item.name or item.key
+        title = item.name
         lines.append(
             f"- <code>{escape(item.key)}</code> ({escape(title)}): "
             f"{status}, {capacity}, active=<code>{item.active_count}</code>, "
-            f"reserved=<code>{item.reserved_count}</code>, limit=<code>{limit}</code>"
+            f"pending=<code>{item.pending_reservations}</code>, "
+            f"occupied=<code>{item.occupied_count}</code>, "
+            f"free=<code>{format_free_slots(item)}</code>, limit=<code>{limit}</code>"
         )
     return "\n".join(lines)
 
@@ -468,21 +470,12 @@ def format_capacity_limit(limit: int | None) -> str:
 
 
 def format_free_slots(capacity: NodeCapacityInfo) -> str:
-    """Format remaining slots without implying disabled nodes can accept traffic."""
+    """Format remaining slots without recalculating capacity details."""
     if not capacity.enabled:
         return "—"
-    if capacity.max_active_subscriptions is None:
+    if capacity.free_slots is None:
         return "∞"
-    return escape(
-        str(
-            max(
-                capacity.max_active_subscriptions
-                - capacity.active_count
-                - capacity.reserved_count,
-                0,
-            )
-        )
-    )
+    return escape(str(capacity.free_slots))
 
 
 def format_node_status(enabled: bool) -> str:
@@ -886,7 +879,8 @@ async def nodes_command(message: Message, settings: Settings) -> None:
                 f"label: <code>{format_node_label(node)}</code>",
                 f"Статус: <code>{format_node_status(capacity.enabled)}</code>",
                 f"Active: <code>{capacity.active_count}</code>",
-                f"Reserved: <code>{capacity.reserved_count}</code>",
+                f"Pending reservations: <code>{capacity.pending_reservations}</code>",
+                f"Occupied: <code>{capacity.occupied_count}</code>",
                 f"Свободно: <code>{format_free_slots(capacity)}</code>",
                 f"Public host: <code>{format_node_public_host(node.xui_public_host)}</code>",
             ]
@@ -931,7 +925,8 @@ async def node_command(
         f"Public host: <code>{format_node_public_host(node.xui_public_host)}</code>",
         f"inbound IDs: <code>{format_node_inbound_ids(node.xui_inbound_ids)}</code>",
         f"Active subscriptions: <code>{capacity.active_count}</code>",
-        f"Pending reservations: <code>{capacity.reserved_count}</code>",
+        f"Pending reservations: <code>{capacity.pending_reservations}</code>",
+        f"Occupied: <code>{capacity.occupied_count}</code>",
         f"Max active subscriptions: <code>{format_capacity_limit(capacity.max_active_subscriptions)}</code>",
         f"Free slots: <code>{format_free_slots(capacity)}</code>",
         *format_node_health_lines(health_status),
