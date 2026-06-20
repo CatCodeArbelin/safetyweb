@@ -746,16 +746,12 @@ async def start(
         try:
             async with async_session_maker() as session:
                 try:
-                    _, user_created = await UserRepository(
+                    user, user_created = await UserRepository(
                         session
                     ).get_or_create_from_telegram(message.from_user)
                 except IntegrityError:
-                    logger.exception(
-                        "Retrying Telegram user upsert after integrity error for %s",
-                        telegram_id,
-                    )
                     await session.rollback()
-                    _, user_created = await UserRepository(
+                    user, user_created = await UserRepository(
                         session
                     ).get_or_create_from_telegram(message.from_user)
                 await session.commit()
