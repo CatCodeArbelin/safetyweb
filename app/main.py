@@ -283,7 +283,6 @@ def custom_servers_request_keyboard(request_callback: str, request_text: str) ->
                     callback_data="custom_servers:support",
                 )
             ],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="custom_servers:back")],
         ]
     )
 
