@@ -4,6 +4,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Final
 
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.config import Settings
 from app.db.models import CustomerBenefit, User
 from app.db.repositories.users import UserRepository
@@ -76,7 +77,7 @@ class BenefitService:
                 return False
 
             statement = (
-                insert(CustomerBenefit)
+                pg_insert(CustomerBenefit)
                 .values(
                     user_id=user.id,
                     benefit_type=EARLY_BUYER_BENEFIT_TYPE,
