@@ -2,6 +2,7 @@
 
 import json
 import logging
+from enum import StrEnum
 from typing import Any
 from urllib.parse import quote
 
@@ -46,18 +47,34 @@ class XuiAddClientRequest(BaseModel):
     inboundIds: list[int]
 
 
+class XuiAuthMode(StrEnum):
+    SESSION_COOKIE = "session_cookie"
+    API_TOKEN = "api_token"
+    AUTO = "auto"
+
+
+API_TOKEN_AUTH_HINT = (
+    "X-UI API token authentication failed. Check XUI_API_TOKEN or set "
+    "XUI_AUTH_MODE=session_cookie if this panel expects cookie login."
+)
+SESSION_COOKIE_AUTH_HINT = (
+    "X-UI session-cookie authentication failed. Check XUI_USERNAME/XUI_PASSWORD, "
+    "web path, or set XUI_AUTH_MODE=api_token if Cookie/API auth is enabled in 3x-ui."
+)
+
+
 class XuiClient:
     """Asynchronous X-UI API client with configurable authentication."""
 
     def __init__(self, settings: Settings, node: XuiNodeConfig | None = None) -> None:
         self.settings = settings
-        self._base_url = (
+        self._base_url = self._normalize_base_url(
             node.xui_base_url if node is not None else settings.xui_base_url
-        ).rstrip("/")
+        )
         self._api_token_value = self._secret_value(
             node.xui_api_token if node is not None else settings.xui_api_token
         )
-        self._auth_mode = (
+        self._auth_mode = XuiAuthMode(
             node.xui_auth_mode if node is not None else settings.xui_auth_mode
         )
         self._username = node.xui_username if node is not None else settings.xui_username
@@ -65,11 +82,19 @@ class XuiClient:
         self._inbound_ids_value = (
             node.xui_inbound_ids if node is not None else settings.xui_inbound_ids
         )
-        if self._username is None or self._password is None:
+        if (
+            self._auth_mode == XuiAuthMode.API_TOKEN
+            and not self._api_token_value.strip()
+        ):
+            raise ValueError("XUI_AUTH_MODE=api_token requires XUI_API_TOKEN")
+        if (
+            self._auth_mode != XuiAuthMode.API_TOKEN
+            and (self._username is None or self._password is None)
+        ):
             msg = "X-UI credentials are not configured"
             raise ValueError(msg)
 
-        api_token = self._api_token
+        api_token = self._token_for_initial_request
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
@@ -260,32 +285,69 @@ class XuiClient:
         )
 
     async def _request(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
-        """Perform an authenticated request, retrying once after auth failures."""
+        """Perform an authenticated request using the configured auth strategy."""
         url = url.lstrip("/")
 
-        if self._api_token:
+        if self._uses_token_auth:
             response = await self._client.request(method, url, **kwargs)
-            self._raise_for_status(response)
-            return self._json(response)
+            if response.status_code not in {401, 403}:
+                self._raise_for_status(response)
+                return self._json(response)
+            if self._auth_mode == XuiAuthMode.API_TOKEN:
+                raise XuiAuthError(API_TOKEN_AUTH_HINT)
+            logger.warning(
+                "X-UI API token auth failed, falling back to session cookie auth"
+            )
+            self._client.headers.pop("Authorization", None)
+            self._authenticated = False
 
         if not self._authenticated:
-            await self.login()
+            try:
+                await self.login()
+            except XuiAuthError as error:
+                raise XuiAuthError(SESSION_COOKIE_AUTH_HINT) from error
 
         response = await self._client.request(method, url, **kwargs)
         if response.status_code in {401, 403}:
             self._authenticated = False
-            await self.login()
-            response = await self._client.request(method, url, **kwargs)
-
+            try:
+                await self.login()
+                response = await self._client.request(method, url, **kwargs)
+            except XuiAuthError as error:
+                raise XuiAuthError(SESSION_COOKIE_AUTH_HINT) from error
+        if response.status_code in {401, 403}:
+            raise XuiAuthError(SESSION_COOKIE_AUTH_HINT)
         self._raise_for_status(response)
         return self._json(response)
 
     @property
     def _api_token(self) -> str:
-        """Return the configured API token when token-based auth is requested."""
-        if self._auth_mode != "api_token":
-            return ""
-        return self._api_token_value.strip()
+        """Return token only when the configured strategy uses token auth."""
+        return self._token_for_initial_request
+
+    @property
+    def _token_for_initial_request(self) -> str:
+        if self._auth_mode == XuiAuthMode.API_TOKEN:
+            return self._api_token_value.strip()
+        if self._auth_mode == XuiAuthMode.AUTO:
+            return self._api_token_value.strip()
+        return ""
+
+    @property
+    def _uses_token_auth(self) -> bool:
+        return bool(self._client.headers.get("Authorization"))
+
+    @staticmethod
+    def _normalize_base_url(value: str) -> str:
+        base_url = value.strip().rstrip("/")
+        lowered = base_url.lower()
+        forbidden = ("/login", "/panel/api", "/panel/")
+        if any(part in lowered for part in forbidden):
+            raise ValueError(
+                "XUI_BASE_URL must point to panel web root, for example "
+                "https://example.com:31293/webpath, not /login or /panel/api"
+            )
+        return base_url
 
     @staticmethod
     def _secret_value(secret: Any) -> str:

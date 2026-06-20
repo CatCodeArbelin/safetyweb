@@ -114,6 +114,11 @@ BOT_COMMAND_REGISTRY: tuple[BotCommandSpec, ...] = (
     ),
     BotCommandSpec(
         BotCommandCategory.ADMIN_SLASH,
+        "/xui_debug",
+        "подробная безопасная диагностика X-UI для всех нод.",
+    ),
+    BotCommandSpec(
+        BotCommandCategory.ADMIN_SLASH,
         "/check_payment &lt;provider_payment_id&gt;",
         "проверить и при необходимости финализировать платёж.",
     ),

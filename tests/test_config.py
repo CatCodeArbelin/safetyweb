@@ -272,3 +272,56 @@ def test_get_platega_payment_method_rejects_missing_method_code() -> None:
         settings.get_platega_payment_method("crypto")
 
     assert "crypto" in str(error.value)
+
+
+def test_xui_auth_mode_api_token_requires_token() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="XUI_AUTH_MODE=api_token requires XUI_API_TOKEN",
+    ):
+        Settings(
+            **_settings_kwargs(),
+            xui_auth_mode="api_token",
+            xui_api_token=SecretStr(""),
+            xui_username="legacy-user",
+            xui_password=SecretStr("legacy-password"),
+            xui_inbound_ids=[1],
+        )
+
+
+def test_xui_auth_mode_session_cookie_with_token_logs_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    Settings(
+        **_settings_kwargs(),
+        xui_auth_mode="session_cookie",
+        xui_api_token=SecretStr("secret-token"),
+        xui_username="legacy-user",
+        xui_password=SecretStr("legacy-password"),
+        xui_inbound_ids=[1],
+    )
+
+    assert "XUI_API_TOKEN is configured but XUI_AUTH_MODE=session_cookie" in caplog.text
+    assert "secret-token" not in caplog.text
+
+
+def test_xui_nodes_inherit_global_auth_mode_when_node_omits_auth_mode() -> None:
+    settings = Settings(
+        **_settings_kwargs(),
+        xui_auth_mode="api_token",
+        xui_api_token=SecretStr("global-token"),
+        xui_nodes_json="""
+        [
+            {
+                "key": "eu-1",
+                "base_url": "https://panel.example.test",
+                "api_token": "node-token",
+                "username": "xui-user",
+                "password": "xui-password",
+                "inbound_ids": [1]
+            }
+        ]
+        """,
+    )
+
+    assert settings.get_xui_node("eu-1").xui_auth_mode == "api_token"

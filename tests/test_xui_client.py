@@ -89,12 +89,101 @@ def test_xui_client_uses_session_cookie_by_default_even_with_token() -> None:
     assert "Authorization" not in client._client.headers
 
 
-def test_xui_client_falls_back_to_session_cookie_when_api_token_empty() -> None:
+def test_xui_client_rejects_api_token_mode_when_api_token_empty() -> None:
     settings = _settings()
     settings.xui_api_token = SecretStr("")
     settings.xui_auth_mode = "api_token"
 
-    client = XuiClient(settings)
+    import pytest
+    with pytest.raises(
+        ValueError,
+        match="XUI_AUTH_MODE=api_token requires XUI_API_TOKEN",
+    ):
+        XuiClient(settings)
 
-    assert client._api_token == ""
-    assert "Authorization" not in client._client.headers
+import asyncio
+import httpx
+import pytest
+
+
+def _install_mock_transport(client: XuiClient, handler):
+    old_client = client._client
+    client._client = httpx.AsyncClient(
+        base_url=client._base_url,
+        follow_redirects=True,
+        headers=old_client.headers,
+        transport=httpx.MockTransport(handler),
+    )
+
+
+def test_xui_client_api_token_mode_uses_bearer_and_skips_login() -> None:
+    settings = _settings()
+    seen: list[tuple[str, str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(
+            (request.method, request.url.path, request.headers.get("authorization"))
+        )
+        assert request.url.path != "/path/login"
+        return httpx.Response(200, json={"success": True, "obj": []})
+
+    client = XuiClient(settings)
+    _install_mock_transport(client, handler)
+    asyncio.run(client.list_inbounds())
+    asyncio.run(client.close())
+
+    assert seen == [("GET", "/path/panel/api/inbounds/list", "Bearer legacy-token")]
+
+
+def test_xui_client_session_cookie_mode_logs_in_without_authorization() -> None:
+    settings = _settings()
+    settings.xui_auth_mode = "session_cookie"
+    seen: list[tuple[str, str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(
+            (request.method, request.url.path, request.headers.get("authorization"))
+        )
+        return httpx.Response(200, json={"success": True, "obj": []})
+
+    client = XuiClient(settings)
+    _install_mock_transport(client, handler)
+    asyncio.run(client.list_inbounds())
+    asyncio.run(client.close())
+
+    assert seen == [
+        ("POST", "/path/login", None),
+        ("GET", "/path/panel/api/inbounds/list", None),
+    ]
+
+
+def test_xui_client_auto_mode_falls_back_from_token_to_session_cookie() -> None:
+    settings = _settings()
+    settings.xui_auth_mode = "auto"
+    seen: list[tuple[str, str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("authorization")
+        seen.append((request.method, request.url.path, auth))
+        if request.url.path == "/path/panel/api/inbounds/list" and auth:
+            return httpx.Response(403, json={"success": False})
+        return httpx.Response(200, json={"success": True, "obj": []})
+
+    client = XuiClient(settings)
+    _install_mock_transport(client, handler)
+    asyncio.run(client.list_inbounds())
+    asyncio.run(client.close())
+
+    assert seen == [
+        ("GET", "/path/panel/api/inbounds/list", "Bearer legacy-token"),
+        ("POST", "/path/login", None),
+        ("GET", "/path/panel/api/inbounds/list", None),
+    ]
+
+
+def test_xui_client_rejects_panel_api_base_url() -> None:
+    settings = _settings()
+    settings.xui_base_url = "https://legacy-panel.example.test/path/panel/api"
+
+    with pytest.raises(ValueError, match="XUI_BASE_URL must point to panel web root"):
+        XuiClient(settings)

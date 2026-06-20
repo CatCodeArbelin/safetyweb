@@ -16,6 +16,7 @@ SENSITIVE_KEY_MARKERS = (
     "authorization",
     "cookie",
     "set-cookie",
+    "username",
     "api-key",
     "api_key",
     "apikey",

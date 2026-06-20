@@ -77,6 +77,7 @@ from app.services.vpn_service import (
     VpnService,
 )
 from app.services.xui_client import XuiClient, XuiError
+from app.services.xui_health_service import XuiHealthResult, check_node_health
 from app.tasks.scheduler import create_scheduler
 from app.utils.sanitize import sanitize_exception, sanitize_string
 
@@ -533,20 +534,29 @@ def format_node_inbound_ids(inbound_ids: list[int]) -> str:
     return ", ".join(escape(str(inbound_id)) for inbound_id in inbound_ids) or "—"
 
 
-async def get_node_health_status(settings: Settings, node: XuiNodeConfig) -> str:
+async def get_node_health_status(
+    settings: Settings,
+    node: XuiNodeConfig,
+) -> XuiHealthResult | str:
     """Return a best-effort, non-secret health status for an X-UI node."""
     if not node.enabled:
         return "disabled"
+    return await check_node_health(settings, node)
 
-    client = XuiClient(settings=settings, node=node)
-    try:
-        await client.list_inbounds()
-    except Exception as error:
-        return f"unhealthy: {type(error).__name__}"
-    finally:
-        await client.close()
 
-    return "healthy"
+def format_node_health_lines(health: XuiHealthResult | str) -> list[str]:
+    """Format safe X-UI health diagnostics for admin output."""
+    if isinstance(health, str):
+        return [f"Health: <code>{escape(health)}</code>"]
+    lines = [
+        f"Health: {'✅ healthy' if health.ok else '❌ unhealthy'}",
+        f"Auth mode: <code>{escape(health.auth_mode)}</code>",
+    ]
+    if health.error_type:
+        lines.append(f"Error: <code>{escape(health.error_type)}</code>")
+    if health.hint:
+        lines.append(f"Hint: {escape(health.hint)}")
+    return lines
 
 
 async def get_active_subscription_counts_by_node() -> dict[str, int]:
@@ -928,7 +938,7 @@ async def node_command(
         f"Pending reservations: <code>{capacity.reserved_count}</code>",
         f"Max active subscriptions: <code>{format_capacity_limit(capacity.max_active_subscriptions)}</code>",
         f"Free slots: <code>{format_free_slots(capacity)}</code>",
-        f"Health: <code>{escape(health_status)}</code>",
+        *format_node_health_lines(health_status),
     ]
     await message.answer("\n".join(lines))
 
@@ -2349,11 +2359,12 @@ async def admin_menu(message: Message, settings: Settings) -> None:
         "Админ-меню MVP:\n"
         "• заявки приходят администраторам автоматически;\n"
         "• подтверждение оплаты — кнопкой «✅ Подтвердить оплату» в заявке;\n"
-        "• диагностика внешнего контура без создания пользователя — командой «XUI debug»;\n"
+        "• диагностика внешнего контура без создания пользователя — командой /xui_debug или «XUI debug»;\n"
         "• /ahelp — список всех команд администратора."
     )
 
 
+@router.message(Command("xui_debug"))
 @router.message(F.text.casefold() == "xui debug")
 async def xui_debug(message: Message, settings: Settings) -> None:
     """Check X-UI OpenAPI availability without changing provisioning state."""
@@ -2361,27 +2372,31 @@ async def xui_debug(message: Message, settings: Settings) -> None:
         await message.answer("Недостаточно прав.")
         return
 
-    xui_client = XuiClient(settings=settings)
-    try:
-        schema = await xui_client.get_openapi()
-    except XuiError as error:
-        await message.answer(
-            f"Диагностика внешнего контура: ошибка ❌\n<code>{escape(str(error))}</code>"
+    lines = ["🧪 X-UI diagnostics"]
+    for node in settings.xui_nodes:
+        result = await check_node_health(settings, node)
+        token_configured = bool(
+            node.xui_api_token and node.xui_api_token.get_secret_value().strip()
         )
-        return
-    finally:
-        await xui_client.close()
-
-    title = schema.get("info", {}).get("title", "OpenAPI")
-    version = schema.get("info", {}).get("version", "unknown")
-    paths = schema.get("paths", {})
-    paths_count = len(paths) if isinstance(paths, dict) else 0
-    await message.answer(
-        "Диагностика внешнего контура: OpenAPI доступен ✅\n"
-        f"Схема: <b>{escape(str(title))}</b>\n"
-        f"Версия: <code>{escape(str(version))}</code>\n"
-        f"Paths: <code>{paths_count}</code>"
-    )
+        username_configured = bool((node.xui_username or "").strip())
+        lines.extend(
+            [
+                "",
+                f"Node: <code>{escape(node.key)}</code>",
+                f"Status: {'✅ healthy' if result.ok else '❌ unhealthy'}",
+                f"Auth mode: <code>{escape(result.auth_mode)}</code>",
+                f"Token configured: <code>{'yes' if token_configured else 'no'}</code>",
+                f"Username configured: <code>{'yes' if username_configured else 'no'}</code>",
+                f"Base URL: <code>{escape(result.base_url_safe)}</code>",
+                f"Public host: <code>{format_node_public_host(node.xui_public_host)}</code>",
+                f"Inbound IDs: <code>{format_node_inbound_ids(node.xui_inbound_ids)}</code>",
+            ]
+        )
+        if result.error_type:
+            lines.append(f"Error: <code>{escape(result.error_type)}</code>")
+        if result.hint:
+            lines.append(f"Hint: {escape(result.hint)}")
+    await message.answer("\n".join(lines))
 
 
 @router.message(F.text == BTN_INSTRUCTION)
