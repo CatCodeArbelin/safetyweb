@@ -776,7 +776,7 @@ async def start(
             reply_markup=trial_access_keyboard(),
         )
         await message.answer(
-            "Главное меню доступно ниже.",
+            "Выберите действие в меню.",
             reply_markup=main_menu_keyboard(),
         )
         return
