@@ -63,7 +63,7 @@ class PaymentFinalizationService:
                 )
                 raise ValueError(msg)
 
-            provider_data = dict(payment.provider_data or {})
+            provider_data = self._without_canonical_provider_data_keys(payment.provider_data)
             user = payment.user
 
             if payment.subscription_id is not None:
@@ -121,9 +121,11 @@ class PaymentFinalizationService:
             )
             if subscription is not None:
                 payment.subscription_id = subscription.id
+                payment.finalization_finished_at = datetime.now(tz=UTC)
+                payment.provisioning_blocked_reason = None
+                payment.provisioning_blocked_at = None
                 payment.provider_data = {
                     **provider_data,
-                    "finalization_finished_at": datetime.now(tz=UTC).isoformat(),
                     "finalization_result": "attached_existing",
                 }
                 await session.flush()
@@ -138,12 +140,15 @@ class PaymentFinalizationService:
                     status="attached_existing",
                 )
 
+            started_at = datetime.now(tz=UTC)
+            attempt_key = token_hex(8)
             provider_data = {
                 **provider_data,
-                "finalization_started_at": datetime.now(tz=UTC).isoformat(),
                 "finalization_source": source,
-                "finalization_lock_id": token_hex(8),
+                "finalization_lock_id": attempt_key,
             }
+            payment.finalization_started_at = started_at
+            payment.finalization_attempt_key = attempt_key
             payment.provider_data = provider_data
             await session.commit()
 
@@ -165,13 +170,11 @@ class PaymentFinalizationService:
                     provider_payment_id,
                 )
                 if payment is not None:
-                    provider_data = dict(payment.provider_data or {})
+                    provider_data = self._without_canonical_provider_data_keys(payment.provider_data)
                     payment.status = PaymentStatus.PAID
-                    payment.provider_data = {
-                        **provider_data,
-                        "provisioning_blocked_reason": "no_available_nodes",
-                        "provisioning_blocked_at": blocked_at.isoformat(),
-                    }
+                    payment.provisioning_blocked_reason = "no_available_nodes"
+                    payment.provisioning_blocked_at = blocked_at
+                    payment.provider_data = provider_data
                     await session.commit()
                     await self._notify_capacity_blocked_user(payment)
             await self._notify_admins_safely(
@@ -226,14 +229,14 @@ class PaymentFinalizationService:
                 raise ValueError(msg)
             if payment.subscription_id is None:
                 payment.subscription_id = provision_result.subscription_id
-            provider_data = dict(payment.provider_data or {})
+            provider_data = self._without_canonical_provider_data_keys(payment.provider_data)
+            payment.finalization_finished_at = datetime.now(tz=UTC)
+            payment.provisioning_blocked_reason = None
+            payment.provisioning_blocked_at = None
             payment.provider_data = {
                 **provider_data,
-                "finalization_finished_at": datetime.now(tz=UTC).isoformat(),
                 "finalization_result": provision_result.action,
             }
-            payment.provider_data.pop("provisioning_blocked_reason", None)
-            payment.provider_data.pop("provisioning_blocked_at", None)
             await session.flush()
             await session.commit()
 
@@ -273,6 +276,22 @@ class PaymentFinalizationService:
             )
         finally:
             await vpn_service.close()
+
+    @staticmethod
+    def _without_canonical_provider_data_keys(
+        provider_data: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Return provider_data without values now canonicalized on Payment columns."""
+        sanitized_provider_data = dict(provider_data or {})
+        for key in (
+            "finalization_started_at",
+            "finalization_finished_at",
+            "finalization_attempt_key",
+            "provisioning_blocked_reason",
+            "provisioning_blocked_at",
+        ):
+            sanitized_provider_data.pop(key, None)
+        return sanitized_provider_data
 
     @staticmethod
     def _sanitize_finalization_error(error: Exception) -> str:

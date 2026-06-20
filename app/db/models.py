@@ -401,6 +401,11 @@ class Payment(Base):
     )
     status_reason: Mapped[str | None] = mapped_column(Text)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finalization_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finalization_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finalization_attempt_key: Mapped[str | None] = mapped_column(String(255))
+    provisioning_blocked_reason: Mapped[str | None] = mapped_column(String(255))
+    provisioning_blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
