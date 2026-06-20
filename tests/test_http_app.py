@@ -108,7 +108,8 @@ def test_notify_rejected_callback_headers_omits_secrets(monkeypatch) -> None:
     assert "203.0.113.8" in text
     assert "PlategaBot/1.0" in text
     assert "198.51.100.10" in text
-    assert "merchant-123" in text
+    assert "me***23" in text
+    assert "merchant-123" not in text
     assert "callback-secret" not in text
     assert "api-key-secret" not in text
     assert "PLATEGA_API_KEY" not in text

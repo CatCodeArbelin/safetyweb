@@ -88,6 +88,7 @@ def test_xui_nodes_json_accepts_canonical_node_keys() -> None:
 def test_xui_nodes_falls_back_to_legacy_default_node() -> None:
     settings = Settings(
         **_settings_kwargs(),
+        xui_auth_mode="session_cookie",
         xui_base_url="https://legacy-panel.example.test",
         xui_public_host="legacy-public.example.test",
         xui_username="legacy-user",
