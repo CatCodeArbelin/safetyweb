@@ -15,6 +15,7 @@ from dateutil.relativedelta import relativedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, XuiNodeConfig
+from app.db.models import SubscriptionStatus
 from app.db.repositories import (
     ActiveSubscriptionAlreadyExistsError,
     SubscriptionRepository,
@@ -126,6 +127,18 @@ class VpnService:
                 self.session
             ).get_active_by_telegram_id(telegram_id)
             if subscription is not None:
+                if self._is_trial_subscription(subscription):
+                    await self._replace_trial_with_paid_subscription(
+                        self.session, subscription
+                    )
+                    return await self._create_client(
+                        self.session,
+                        telegram_id,
+                        months,
+                        source_payment_id=source_payment_id,
+                        preferred_node_key=preferred_node_key,
+                        exclude_payment_id=exclude_payment_id,
+                    )
                 return await self._extend_active_subscription(
                     self.session,
                     subscription,
@@ -146,12 +159,25 @@ class VpnService:
                 session
             ).get_active_by_telegram_id(telegram_id)
             if subscription is not None:
-                result = await self._extend_active_subscription(
-                    session,
-                    subscription,
-                    months,
-                    source_payment_id=source_payment_id,
-                )
+                if self._is_trial_subscription(subscription):
+                    await self._replace_trial_with_paid_subscription(
+                        session, subscription
+                    )
+                    result = await self._create_client(
+                        session,
+                        telegram_id,
+                        months,
+                        source_payment_id=source_payment_id,
+                        preferred_node_key=preferred_node_key,
+                        exclude_payment_id=exclude_payment_id,
+                    )
+                else:
+                    result = await self._extend_active_subscription(
+                        session,
+                        subscription,
+                        months,
+                        source_payment_id=source_payment_id,
+                    )
             else:
                 result = await self._create_client(
                     session,
@@ -232,6 +258,42 @@ class VpnService:
             )
             await session.commit()
             return result
+
+    @staticmethod
+    def _is_trial_subscription(subscription: Any) -> bool:
+        """Return whether a subscription represents trial access."""
+        vpn_config = subscription.vpn_config or {}
+        return vpn_config.get("access_type") == "trial" or str(
+            subscription.xui_email or ""
+        ).startswith("trial_tg_")
+
+    async def _replace_trial_with_paid_subscription(
+        self,
+        session: AsyncSession,
+        subscription: Any,
+    ) -> None:
+        """Remove trial access from X-UI and mark it replaced before paid create."""
+        node = self._node_selector(session).get_node_for_subscription(subscription)
+        async with self._xui_client_for_node(node) as xui_client:
+            await xui_client.delete_client(
+                subscription.inbound_id, subscription.xui_client_id
+            )
+
+        now = datetime.now(UTC)
+        vpn_config = dict(subscription.vpn_config or {})
+        vpn_config.update(
+            {
+                "deprovisioned_at": now.isoformat(),
+                "deprovision_policy": "delete",
+                "node_slot_released": True,
+                "trial_replaced_by_paid_at": now.isoformat(),
+            }
+        )
+        subscription.status = SubscriptionStatus.EXPIRED
+        subscription.disabled_at = now
+        subscription.vpn_config = vpn_config
+        session.add(subscription)
+        await session.flush()
 
     async def _extend_active_subscription_by_days(
         self,
@@ -430,9 +492,12 @@ class VpnService:
             telegram_id
         )
         if existing is not None:
-            return await self._extend_active_subscription(
-                session, existing, months, source_payment_id=source_payment_id
-            )
+            if self._is_trial_subscription(existing):
+                await self._replace_trial_with_paid_subscription(session, existing)
+            else:
+                return await self._extend_active_subscription(
+                    session, existing, months, source_payment_id=source_payment_id
+                )
         client_id = str(uuid4())
         sub_id = f"tg_{telegram_id}_{token_hex(4)}"
         email = sub_id
