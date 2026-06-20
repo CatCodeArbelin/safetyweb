@@ -5,23 +5,35 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 os.environ.setdefault("BOT_TOKEN", "bot-token")
 os.environ.setdefault("POSTGRES_PASSWORD", "postgres-password")
 
+from app.config import Settings
 from app.db.models import User
 from app.db.repositories.users import UserRepository
-from app.db.session import async_session_maker
 
 
 @pytest.mark.asyncio
 async def test_upsert_telegram_user_is_race_safe_across_sessions() -> None:
     telegram_id = 670831477
+    settings = Settings()
+    engine = create_async_engine(
+        settings.database_url,
+        poolclass=NullPool,
+        pool_pre_ping=True,
+    )
+    session_maker = async_sessionmaker(
+        bind=engine,
+        expire_on_commit=False,
+    )
 
     async def delete_test_user() -> None:
-        async with async_session_maker() as session, session.begin():
+        async with session_maker() as session, session.begin():
             existing = await session.scalar(
                 select(User).where(User.telegram_id == telegram_id)
             )
@@ -34,7 +46,7 @@ async def test_upsert_telegram_user_is_race_safe_across_sessions() -> None:
         pytest.skip(f"test database is unavailable: {exc}")
 
     try:
-        async with async_session_maker() as session, session.begin():
+        async with session_maker() as session, session.begin():
             repo = UserRepository(session)
             await repo.upsert_telegram_user(
                 telegram_id=telegram_id,
@@ -45,7 +57,7 @@ async def test_upsert_telegram_user_is_race_safe_across_sessions() -> None:
             )
 
         async def upsert_once() -> tuple[User, bool]:
-            async with async_session_maker() as session, session.begin():
+            async with session_maker() as session, session.begin():
                 repo = UserRepository(session)
                 return await repo.upsert_telegram_user(
                     telegram_id=telegram_id,
@@ -60,7 +72,7 @@ async def test_upsert_telegram_user_is_race_safe_across_sessions() -> None:
         assert all(user.telegram_id == telegram_id for user, _ in results)
         assert User.__table__.c.telegram_id.unique is True
 
-        async with async_session_maker() as session:
+        async with session_maker() as session:
             user_count = await session.scalar(
                 select(func.count(User.id)).where(User.telegram_id == telegram_id)
             )
@@ -76,5 +88,8 @@ async def test_upsert_telegram_user_is_race_safe_across_sessions() -> None:
         assert user.language_code == "ru"
         assert user.is_active is True
     finally:
-        await delete_test_user()
+        try:
+            await delete_test_user()
+        finally:
+            await engine.dispose()
 
