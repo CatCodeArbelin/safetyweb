@@ -2498,12 +2498,13 @@ async def main() -> None:
     dispatcher = Dispatcher(storage=storage)
     dispatcher.include_router(router)
     await setup_bot_command_menu(bot, settings)
+    if settings.telegram_drop_pending_updates_on_startup:
+        await bot.delete_webhook(drop_pending_updates=True)
 
     services: list[Awaitable[Any]] = [
         dispatcher.start_polling(
             bot,
             settings=settings,
-            drop_pending_updates=settings.telegram_drop_pending_updates_on_startup,
         ),
         run_scheduler(settings, bot),
     ]

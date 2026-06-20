@@ -21,8 +21,16 @@ def test_main_sets_command_menu_before_polling() -> None:
     main_source = Path("app/main.py").read_text()
 
     setup_index = main_source.index("await setup_bot_command_menu(bot, settings)")
-    polling_index = main_source.index("dispatcher.start_polling(bot, settings=settings)")
+    delete_webhook_index = main_source.index(
+        "await bot.delete_webhook(drop_pending_updates=True)"
+    )
+    polling_index = main_source.index("dispatcher.start_polling(")
 
-    assert setup_index < polling_index
+    assert setup_index < delete_webhook_index < polling_index
+    assert (
+        "drop_pending_updates=settings.telegram_drop_pending_updates_on_startup"
+        not in main_source
+    )
+    assert "settings=settings" in main_source[polling_index:]
     assert "BotCommandScopeDefault" in main_source
     assert "BotCommandScopeChat(chat_id=admin_id)" in main_source
