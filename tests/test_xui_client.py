@@ -61,7 +61,7 @@ def test_xui_client_redacts_sensitive_diagnostics() -> None:
     )
 
     assert redacted == {
-        "username": "***",
+        "username": "node-user",
         "password": "***",
         "cookie": "***",
         "nested": {"token": "***", "message": "ok"},
@@ -72,7 +72,7 @@ def test_xui_client_redacts_sensitive_diagnostics() -> None:
         'Authorization: Bearer secret-bearer cookie=session-secret'
     )
 
-    assert "node-user" not in text
+    assert "username=node-user" in text
     assert "node-password" not in text
     assert "secret-token" not in text
     assert "secret-bearer" not in text

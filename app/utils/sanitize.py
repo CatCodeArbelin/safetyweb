@@ -16,7 +16,6 @@ SENSITIVE_KEY_MARKERS = (
     "authorization",
     "cookie",
     "set-cookie",
-    "username",
     "api-key",
     "api_key",
     "apikey",
@@ -41,7 +40,7 @@ _PRIVATE_KEY_RE = re.compile(
 _BOT_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b")
 _BEARER_RE = re.compile(r"(?i)(bearer\s+)[^\s,;\"'<>]+")
 _ASSIGNMENT_RE = re.compile(
-    r'(?i)("?(?:x-secret|x-merchantid|authorization|cookie|set-cookie|username|password|token|secret|api[_-]?key|api[_-]?token|private[_ -]?key)"?\s*[:=]\s*)"?[^",&;\s}]+"?'
+    r'(?i)("?(?:x-secret|x-merchantid|authorization|cookie|set-cookie|password|token|secret|api[_-]?key|api[_-]?token|private[_ -]?key)"?\s*[:=]\s*)"?[^",&;\s}]+"?'
 )
 
 
