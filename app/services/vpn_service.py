@@ -23,7 +23,7 @@ from app.db.repositories import (
 from app.db.session import async_session_maker
 from app.services.node_selector_service import (
     NodeSelectorService,
-    lock_capacity_selection,
+    acquire_capacity_selection_lock,
 )
 from app.services.xui_client import XuiClient
 
@@ -313,7 +313,7 @@ class VpnService:
         email = sub_id
         expires_at = now + timedelta(hours=hours)
         expiry_ms = int(expires_at.timestamp() * 1000)
-        await lock_capacity_selection(session)
+        await acquire_capacity_selection_lock(session)
         node = await self._node_selector(session).select_node_for_new_subscription()
         traffic_limit_gb = self._node_default_traffic_gb(node)
         total_bytes = traffic_limit_gb * 1024**3
@@ -438,7 +438,7 @@ class VpnService:
         email = sub_id
         expires_at = datetime.now(UTC) + relativedelta(months=months)
         expiry_ms = int(expires_at.timestamp() * 1000)
-        await lock_capacity_selection(session)
+        await acquire_capacity_selection_lock(session)
         node_selector = self._node_selector(session)
         node = None
         if preferred_node_key:

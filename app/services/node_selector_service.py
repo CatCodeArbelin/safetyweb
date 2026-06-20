@@ -29,11 +29,17 @@ class NodeCapacityInfo:
     has_capacity: bool
 
 
-async def lock_capacity_selection(session: AsyncSession) -> None:
+async def acquire_capacity_selection_lock(session: AsyncSession) -> None:
     """Serialize X-UI node capacity selection within the current transaction."""
     await session.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext('xui_node_capacity_selection'))")
+        text("SELECT pg_advisory_xact_lock(:k1, :k2)"),
+        {"k1": 947201, "k2": 1},
     )
+
+
+async def lock_capacity_selection(session: AsyncSession) -> None:
+    """Backward-compatible alias for acquiring the capacity selection lock."""
+    await acquire_capacity_selection_lock(session)
 
 
 async def get_node_occupancy_counts(
@@ -151,7 +157,7 @@ class NodeSelectorService:
         *,
         exclude_payment_id: int | None = None,
     ) -> XuiNodeConfig:
-        await lock_capacity_selection(session)
+        await acquire_capacity_selection_lock(session)
         occupancy_counts = await get_node_occupancy_counts(
             session,
             exclude_payment_id=exclude_payment_id,
@@ -188,7 +194,7 @@ class NodeSelectorService:
         *,
         exclude_payment_id: int | None = None,
     ) -> XuiNodeConfig | None:
-        await lock_capacity_selection(session)
+        await acquire_capacity_selection_lock(session)
         try:
             node = self.settings.get_xui_node(preferred_node_key)
         except KeyError:
