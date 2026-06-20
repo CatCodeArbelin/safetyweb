@@ -19,7 +19,7 @@ from app.db.repositories.payments import PaymentRepository
 from app.db.session import async_session_maker
 from app.services.node_selector_service import NodeSelectorService
 from app.services.platega_client import PlategaClient, build_platega_payload
-from app.utils.sanitize import sanitize_dict, sanitize_exception, sensitive_values_from
+from app.utils.sanitize import sanitize_exception, sanitize_mapping, sensitive_values_from
 
 
 MANUAL_PROVIDER_NAME: Final = "manual"
@@ -540,7 +540,7 @@ class PlategaPaymentProvider(PaymentProvider):
         return parsed
 
     def _sanitize_provider_data(self, data: dict[str, Any]) -> dict[str, Any]:
-        return sanitize_dict(data, secrets=self._secret_values())
+        return sanitize_mapping(data, secrets=self._secret_values())
 
     def _secret_values(self) -> list[str]:
         return sensitive_values_from(
