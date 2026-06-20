@@ -116,6 +116,61 @@ ROUTER_SETUP_PRICE_RUB=1500
 - `XUI_DEFAULT_MAX_ACTIVE_SUBSCRIPTIONS` — лимит active-подписок для виртуальной legacy-ноды `default`; укажите положительное число или оставьте unset/`null`, чтобы не ограничивать ёмкость.
 - `NODE_RESERVATION_TTL_MINUTES` — время жизни временной резервации ноды в минутах.
 
+
+## 3x-ui authentication
+
+Бот поддерживает три явных режима авторизации панели. По умолчанию оставлен `session_cookie`, чтобы не ломать существующие установки. Если `XUI_API_TOKEN` заполнен, но `XUI_AUTH_MODE=session_cookie`, token не используется.
+
+### Session cookie mode
+
+```env
+XUI_AUTH_MODE=session_cookie
+XUI_USERNAME=admin
+XUI_PASSWORD=...
+XUI_API_TOKEN=
+```
+
+### API token mode
+
+```env
+XUI_AUTH_MODE=api_token
+XUI_API_TOKEN=...
+XUI_USERNAME=admin
+XUI_PASSWORD=...
+```
+
+Даже в api_token mode username/password могут оставаться обязательными для некоторых внутренних операций/валидации, но запросы к panel API должны использовать Bearer token.
+
+### Auto mode
+
+```env
+XUI_AUTH_MODE=auto
+XUI_API_TOKEN=...
+XUI_USERNAME=admin
+XUI_PASSWORD=...
+```
+
+В `auto` бот сначала пробует Bearer token, а при 401/403 безопасно переходит на session cookie.
+
+### Troubleshooting 403
+
+Если диагностика показывает:
+
+```text
+X-UI authentication failed (status=403, response=)
+```
+
+Проверить:
+
+1. `XUI_AUTH_MODE` выбран правильно.
+2. Если используете token — `XUI_AUTH_MODE=api_token`.
+3. Если используете login/password — `XUI_AUTH_MODE=session_cookie`.
+4. `XUI_BASE_URL` указывает на web root панели, без `/login` и без `/panel/api`.
+5. `XUI_INBOUND_IDS` существуют в панели.
+6. У панели доступен API.
+
+Администратор может использовать `/node <node_key>` и `/xui_debug`: команды показывают auth mode, наличие token/username и подсказки без вывода секретов.
+
 ## Multi-node режим
 
 По умолчанию бот работает в legacy single-node режиме: используются обычные переменные `XUI_BASE_URL`, `XUI_PUBLIC_HOST`, `XUI_SUB_BASE_URL`, `XUI_API_TOKEN`, `XUI_AUTH_MODE`, `XUI_USERNAME`, `XUI_PASSWORD`, `XUI_INBOUND_IDS`, `XUI_DEFAULT_TRAFFIC_GB`, `XUI_DEFAULT_LIMIT_IP` и `XUI_DEFAULT_MAX_ACTIVE_SUBSCRIPTIONS`. Этот режим подходит для одной 3x-ui-ноды и сохраняет обратную совместимость с существующими `.env`; внутри приложения она отображается как виртуальная нода с ключом `default`.
@@ -297,6 +352,7 @@ TEST_MODE не выдаёт скидку раннего покупателя.
 - `/stats` — посмотреть общую статистику по пользователям, подпискам, оплатам, скидкам и реферальной программе.
 - `/nodes` — показать безопасную сводку по настроенным нодам.
 - `/node <node_key>` — показать безопасную диагностику одной ноды.
+- `/xui_debug` — показать безопасную X-UI диагностику авторизации и endpoint для всех нод.
 - `/add_days <telegram_id> <days> [reason]` — вручную добавить бонусные дни к активной подписке пользователя.
 - `/check_payment <provider_payment_id>` — проверить локальный и провайдерский статус платежа, при необходимости догнать финализацию.
 - `/payment <provider_payment_id>` — alias для `/check_payment`.

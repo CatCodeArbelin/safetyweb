@@ -1,6 +1,7 @@
 """Application configuration."""
 
 import json
+import logging
 from typing import Annotated, Literal
 from urllib.parse import quote_plus
 
@@ -14,6 +15,11 @@ from pydantic import (
     model_validator,
 )
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+logger = logging.getLogger(__name__)
+
+XuiAuthModeLiteral = Literal["session_cookie", "api_token", "auto"]
 
 
 class XuiNodeConfig(BaseModel):
@@ -45,7 +51,7 @@ class XuiNodeConfig(BaseModel):
         repr=False,
         validation_alias=AliasChoices("api_token", "xui_api_token"),
     )
-    xui_auth_mode: Literal["session_cookie", "api_token"] = Field(
+    xui_auth_mode: XuiAuthModeLiteral = Field(
         default="session_cookie",
         validation_alias=AliasChoices("auth_mode", "xui_auth_mode"),
     )
@@ -168,7 +174,7 @@ class Settings(BaseSettings):
     xui_public_host: str | None = None
     xui_sub_base_url: str | None = None
     xui_api_token: SecretStr | None = Field(default=None, repr=False)
-    xui_auth_mode: Literal["session_cookie", "api_token"] = "session_cookie"
+    xui_auth_mode: XuiAuthModeLiteral = "session_cookie"
     xui_username: str | None = None
     xui_password: SecretStr | None = Field(default=None, repr=False)
     xui_inbound_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
@@ -260,6 +266,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_settings(self) -> "Settings":
         """Validate cross-field settings and defaults."""
+        self._validate_xui_auth_settings()
         self._validate_xui_nodes()
 
         if self.platega_callback_secret is None:
@@ -282,6 +289,27 @@ class Settings(BaseSettings):
 
         return self
 
+    def _validate_xui_auth_settings(self) -> None:
+        """Validate X-UI auth mode requirements and warn about ignored token auth."""
+        token = self._secret_plain(self.xui_api_token).strip()
+        username = (self.xui_username or "").strip()
+        password = self._secret_plain(self.xui_password).strip()
+        if self.xui_nodes_json:
+            return
+        if not self.xui_inbound_ids and not any((token, username, password)):
+            return
+        if self.xui_auth_mode == "api_token" and not token:
+            raise ValueError("XUI_AUTH_MODE=api_token requires XUI_API_TOKEN")
+        if self.xui_auth_mode == "session_cookie" and (not username or not password):
+            raise ValueError("XUI_AUTH_MODE=session_cookie requires XUI_USERNAME and XUI_PASSWORD")
+        if self.xui_auth_mode == "auto" and not token and (not username or not password):
+            raise ValueError("XUI_AUTH_MODE=auto requires XUI_API_TOKEN or XUI_USERNAME and XUI_PASSWORD")
+        if self.xui_auth_mode == "session_cookie" and token:
+            logger.warning(
+                "XUI_API_TOKEN is configured but XUI_AUTH_MODE=session_cookie, token will not be used. "
+                "Set XUI_AUTH_MODE=api_token to use API token authentication."
+            )
+
     def _validate_xui_nodes(self) -> None:
         """Validate X-UI node definitions and legacy fallback settings."""
         nodes = self.xui_nodes_json
@@ -292,17 +320,19 @@ class Settings(BaseSettings):
                 raise ValueError(msg)
             return
 
-        missing_fields = [
-            field_name
-            for field_name in ("xui_username", "xui_password")
-            if getattr(self, field_name) in (None, "")
-        ]
-        if missing_fields:
-            msg = "Legacy X-UI configuration requires: " + ", ".join(missing_fields)
-            raise ValueError(msg)
         if not self.xui_inbound_ids:
+            if not any((self.xui_api_token, self.xui_username, self.xui_password)):
+                return
             msg = "XUI_INBOUND_IDS must not be empty"
             raise ValueError(msg)
+
+    @staticmethod
+    def _secret_plain(secret: object) -> str:
+        if secret is None:
+            return ""
+        if hasattr(secret, "get_secret_value"):
+            return str(secret.get_secret_value())
+        return str(secret)
 
     @field_validator("xui_default_max_active_subscriptions", mode="before")
     @classmethod
@@ -435,7 +465,12 @@ class Settings(BaseSettings):
     def xui_nodes(self) -> list[XuiNodeConfig]:
         """Return configured X-UI nodes or the legacy default node."""
         if self.xui_nodes_json:
-            return self.xui_nodes_json
+            return [
+                node.model_copy(update={"xui_auth_mode": self.xui_auth_mode})
+                if "xui_auth_mode" not in node.model_fields_set
+                else node
+                for node in self.xui_nodes_json
+            ]
 
         if self.xui_username is None or self.xui_password is None:
             msg = "Legacy X-UI configuration is incomplete"
