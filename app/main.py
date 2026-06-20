@@ -1,6 +1,7 @@
 """Application entry point."""
 
 import asyncio
+import logging
 from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -15,6 +16,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.redis import RedisStorage
 import uvicorn
+from sqlalchemy.exc import IntegrityError
 
 from aiogram.types import (
     BotCommandScopeChat,
@@ -98,6 +100,8 @@ PROVISIONING_USER_ERROR = (
 )
 
 TARIFF_EMOJIS = {1: "🔹", 3: "🔷", 6: "💎", 12: "👑"}
+
+logger = logging.getLogger(__name__)
 
 router = Router(name="safetyweb")
 
@@ -729,11 +733,29 @@ async def start(
     benefit_granted = False
     trial_available = False
     if telegram_id is not None:
-        async with async_session_maker() as session:
-            _, user_created = await UserRepository(session).get_or_create_from_telegram(
-                message.from_user
+        try:
+            async with async_session_maker() as session:
+                try:
+                    _, user_created = await UserRepository(
+                        session
+                    ).get_or_create_from_telegram(message.from_user)
+                except IntegrityError:
+                    logger.exception(
+                        "Retrying Telegram user upsert after integrity error for %s",
+                        telegram_id,
+                    )
+                    await session.rollback()
+                    _, user_created = await UserRepository(
+                        session
+                    ).get_or_create_from_telegram(message.from_user)
+                await session.commit()
+        except Exception:
+            logger.exception("Failed to open main menu for Telegram user %s", telegram_id)
+            await message.answer(
+                "Не удалось открыть главное меню из-за временной технической ошибки.\n\n"
+                "Пожалуйста, попробуйте ещё раз через несколько секунд."
             )
-            await session.commit()
+            return
 
         if user_created:
             benefit_granted = await BenefitService(
@@ -2467,7 +2489,11 @@ async def main() -> None:
     await setup_bot_command_menu(bot, settings)
 
     services: list[Awaitable[Any]] = [
-        dispatcher.start_polling(bot, settings=settings),
+        dispatcher.start_polling(
+            bot,
+            settings=settings,
+            drop_pending_updates=settings.telegram_drop_pending_updates_on_startup,
+        ),
         run_scheduler(settings, bot),
     ]
     if settings.payment_provider == "platega" and not settings.test_mode:

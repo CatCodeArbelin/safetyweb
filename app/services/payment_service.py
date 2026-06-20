@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.db.models import Payment, PaymentStatus, User
+from app.db.repositories.users import UserRepository
 from app.db.repositories.payments import PaymentRepository
 from app.db.session import async_session_maker
 from app.services.node_selector_service import NodeSelectorService
@@ -277,14 +278,7 @@ class ManualPaymentProvider(PaymentProvider):
 
     @staticmethod
     async def _get_or_create_user(session: AsyncSession, telegram_id: int) -> User:
-        user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
-        if user is not None:
-            return user
-
-        user = User(telegram_id=telegram_id)
-        session.add(user)
-        await session.flush()
-        return user
+        return await UserRepository(session).get_or_create(telegram_id)
 
 
 class PlategaPaymentProvider(PaymentProvider):
