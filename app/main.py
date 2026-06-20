@@ -120,8 +120,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_BUY_ACCESS), KeyboardButton(text=BTN_PROFILE)],
-            [KeyboardButton(text=BTN_INVITE_FRIEND)],
-            [KeyboardButton(text=BTN_CUSTOM_SERVERS)],
+            [KeyboardButton(text=BTN_INVITE_FRIEND), KeyboardButton(text=BTN_CUSTOM_SERVERS)],
             [KeyboardButton(text=BTN_INSTRUCTION), KeyboardButton(text=BTN_SUPPORT)],
             [KeyboardButton(text=BTN_DOCUMENTS)],
         ],
