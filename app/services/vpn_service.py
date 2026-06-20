@@ -597,6 +597,7 @@ class VpnService:
             vpn_config={
                 "email": email,
                 **self._node_vpn_config(node),
+                "access_type": "paid",
                 **self._payment_marker_config(
                     source_payment_id, months, "created", datetime.now(UTC)
                 ),
