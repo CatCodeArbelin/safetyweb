@@ -411,6 +411,16 @@ async def _deprovision_client(
     xui_client: XuiClient,
     settings: Settings,
 ) -> None:
+    vpn_config = subscription.vpn_config or {}
+    is_trial = vpn_config.get("access_type") == "trial" or str(
+        subscription.xui_email or ""
+    ).startswith("trial_tg_")
+    if is_trial:
+        await xui_client.delete_client(
+            subscription.inbound_id, subscription.xui_client_id
+        )
+        return
+
     if settings.xui_expired_client_policy == "delete":
         await xui_client.delete_client(
             subscription.inbound_id, subscription.xui_client_id

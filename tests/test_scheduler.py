@@ -341,6 +341,91 @@ class FakeExpiryXuiClient:
         FakeExpiryXuiClient.closed_nodes.append(self.node.key)
 
 
+class RecordingDeprovisionXuiClient:
+    def __init__(self) -> None:
+        self.deleted: list[tuple[int, str]] = []
+        self.updated: list[tuple[int, str, dict[str, object], bool]] = []
+
+    async def delete_client(self, inbound_id: int, client_id: str) -> None:
+        self.deleted.append((inbound_id, client_id))
+
+    async def update_client(
+        self,
+        inbound_id: int,
+        client_id: str,
+        payload: dict[str, object],
+        *,
+        enable: bool,
+    ) -> None:
+        self.updated.append((inbound_id, client_id, payload, enable))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("vpn_config", "xui_email"),
+    [
+        ({"access_type": "trial", "client": {"flow": "xtls-rprx-vision"}}, "paid@example.test"),
+        ({"client": {"flow": "xtls-rprx-vision"}}, "trial_tg_1234_abcd"),
+    ],
+)
+async def test_deprovision_client_deletes_trials_before_policy(
+    vpn_config,
+    xui_email,
+) -> None:
+    xui_client = RecordingDeprovisionXuiClient()
+    subscription = SimpleNamespace(
+        inbound_id=2,
+        xui_client_id="client-id",
+        xui_email=xui_email,
+        vpn_config=vpn_config,
+    )
+
+    await scheduler_module._deprovision_client(
+        subscription,
+        xui_client,
+        make_settings(xui_expired_client_policy="disable"),
+    )
+
+    assert xui_client.deleted == [(2, "client-id")]
+    assert xui_client.updated == []
+
+
+@pytest.mark.anyio
+async def test_deprovision_client_keeps_disable_policy_for_paid_subscription() -> None:
+    xui_client = RecordingDeprovisionXuiClient()
+    subscription = SimpleNamespace(
+        inbound_id=2,
+        xui_client_id="client-id",
+        xui_email="paid@example.test",
+        vpn_config={"client": {"flow": "xtls-rprx-vision"}},
+    )
+
+    await scheduler_module._deprovision_client(
+        subscription,
+        xui_client,
+        make_settings(xui_expired_client_policy="disable"),
+    )
+
+    assert xui_client.deleted == []
+    assert xui_client.updated == [
+        (
+            2,
+            "client-id",
+            {
+                "clients": [
+                    {
+                        "flow": "xtls-rprx-vision",
+                        "id": "client-id",
+                        "email": "paid@example.test",
+                        "enable": False,
+                    }
+                ]
+            },
+            False,
+        )
+    ]
+
+
 @pytest.mark.anyio
 async def test_deprovision_subscription_client_uses_subscription_node_and_closes_client(
     monkeypatch,
