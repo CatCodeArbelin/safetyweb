@@ -19,11 +19,13 @@ class NodeCapacityInfo:
     """Current capacity snapshot for a configured X-UI node."""
 
     key: str
-    name: str | None
+    name: str
     enabled: bool
     active_count: int
-    reserved_count: int
+    pending_reservations: int
+    occupied_count: int
     max_active_subscriptions: int | None
+    free_slots: int | None
     has_capacity: bool
 
 
@@ -220,17 +222,19 @@ class NodeSelectorService:
             limit = node.max_active_subscriptions
             if limit is None:
                 limit = self.settings.xui_default_max_active_subscriptions
-            has_capacity = node.enabled and (
-                limit is None or active_count + reserved_count < limit
-            )
+            occupied_count = active_count + reserved_count
+            free_slots = None if limit is None else max(limit - occupied_count, 0)
+            has_capacity = node.enabled and (limit is None or occupied_count < limit)
             snapshot.append(
                 NodeCapacityInfo(
                     key=node.key,
-                    name=node.name,
+                    name=node.name or node.key,
                     enabled=node.enabled,
                     active_count=active_count,
-                    reserved_count=reserved_count,
+                    pending_reservations=reserved_count,
+                    occupied_count=occupied_count,
                     max_active_subscriptions=limit,
+                    free_slots=free_slots,
                     has_capacity=has_capacity,
                 )
             )
