@@ -24,6 +24,12 @@ SENSITIVE_KEY_MARKERS = (
     "private_key",
     "private-key",
     "private key",
+    "connection_string",
+    "postgres_password",
+    "xui_password",
+    "platega_api_key",
+    "bot_token",
+    "api_token",
 )
 
 PARTIAL_KEY_MARKERS = ("x-merchantid", "merchant_id", "merchantid")
@@ -53,13 +59,21 @@ def sensitive_values_from(*values: Any) -> list[str]:
     return secrets
 
 
-def sanitize_dict(
+def sanitize_mapping(
     data: Mapping[Any, Any],
     secrets: list[str] | tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Sanitize a mapping recursively and stringify keys for JSON storage."""
     sanitized = sanitize_value(data, secrets=secrets)
     return sanitized if isinstance(sanitized, dict) else {}
+
+
+def sanitize_dict(
+    data: Mapping[Any, Any],
+    secrets: list[str] | tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Backward-compatible alias for :func:`sanitize_mapping`."""
+    return sanitize_mapping(data, secrets=secrets)
 
 
 def sanitize_list(
@@ -76,7 +90,7 @@ def sanitize_headers(
     secrets: list[str] | tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Sanitize HTTP headers, masking sensitive headers and partial merchant IDs."""
-    return sanitize_dict(headers, secrets=secrets)
+    return sanitize_mapping(headers, secrets=secrets)
 
 
 def sanitize_exception(
@@ -130,14 +144,21 @@ def sanitize_value(value: Any, secrets: list[str] | tuple[str, ...] = ()) -> Any
     return value
 
 
+def _normalize_key_marker(value: str) -> str:
+    return value.lower().replace("_", "-")
+
+
 def _is_sensitive_key(key: str) -> bool:
-    normalized = key.lower().replace("_", "-")
-    return any(marker in normalized for marker in SENSITIVE_KEY_MARKERS)
+    normalized = _normalize_key_marker(key)
+    return any(
+        _normalize_key_marker(marker) in normalized
+        for marker in SENSITIVE_KEY_MARKERS
+    )
 
 
 def _is_partial_key(key: str) -> bool:
-    normalized = key.lower().replace("_", "-")
-    return any(marker in normalized for marker in PARTIAL_KEY_MARKERS)
+    normalized = _normalize_key_marker(key)
+    return any(_normalize_key_marker(marker) in normalized for marker in PARTIAL_KEY_MARKERS)
 
 
 def _partial_mask(value: Any) -> str:

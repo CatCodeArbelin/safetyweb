@@ -14,7 +14,7 @@ from app.db.repositories.users import UserRepository
 from app.db.session import async_session_maker
 from app.services.payment_finalization_service import PaymentFinalizationService
 from app.services.payment_service import PLATEGA_PROVIDER_NAME
-from app.utils.sanitize import sanitize_dict, sanitize_exception
+from app.utils.sanitize import sanitize_exception, sanitize_mapping
 from app.services.platega_client import PlategaClient
 
 if TYPE_CHECKING:
@@ -558,7 +558,7 @@ class PlategaWebhookService:
 
     @classmethod
     def _sanitize_transaction(cls, data: dict[str, Any]) -> dict[str, Any]:
-        return sanitize_dict(data)
+        return sanitize_mapping(data)
 
     @classmethod
     def _candidate_values(cls, data: Any, *keys: str) -> list[Any]:
