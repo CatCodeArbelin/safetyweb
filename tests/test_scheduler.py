@@ -391,6 +391,26 @@ async def test_deprovision_client_deletes_trials_before_policy(
 
 
 @pytest.mark.anyio
+async def test_expired_trial_subscription_is_deleted_even_when_policy_disable() -> None:
+    xui_client = RecordingDeprovisionXuiClient()
+    subscription = SimpleNamespace(
+        inbound_id=2,
+        xui_client_id="trial-client-id",
+        xui_email="trial_tg_1234_abcd",
+        vpn_config={"access_type": "trial", "client": {"flow": "xtls-rprx-vision"}},
+    )
+
+    await scheduler_module._deprovision_client(
+        subscription,
+        xui_client,
+        make_settings(xui_expired_client_policy="disable"),
+    )
+
+    assert xui_client.deleted == [(2, "trial-client-id")]
+    assert xui_client.updated == []
+
+
+@pytest.mark.anyio
 async def test_deprovision_client_keeps_disable_policy_for_paid_subscription() -> None:
     xui_client = RecordingDeprovisionXuiClient()
     subscription = SimpleNamespace(
