@@ -163,6 +163,7 @@ class Settings(BaseSettings):
     postgres_user: str = "postgres"
     postgres_password: SecretStr
     redis_url: str = "redis://localhost:6379/0"
+    telegram_drop_pending_updates_on_startup: bool = True
     xui_base_url: str = "http://localhost:2053"
     xui_public_host: str | None = None
     xui_sub_base_url: str | None = None

@@ -4,10 +4,9 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Final
 
 from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import insert
-
 from app.config import Settings
 from app.db.models import CustomerBenefit, User
+from app.db.repositories.users import UserRepository
 from app.db.session import async_session_maker
 
 EARLY_BUYER_BENEFIT_TYPE: Final = "early_buyer_discount"
@@ -57,11 +56,7 @@ class BenefitService:
             return False
 
         async with async_session_maker() as session:
-            user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
-            if user is None:
-                user = User(telegram_id=telegram_id)
-                session.add(user)
-                await session.flush()
+            user = await UserRepository(session).get_or_create(telegram_id)
 
             existing = await session.scalar(
                 select(CustomerBenefit).where(
