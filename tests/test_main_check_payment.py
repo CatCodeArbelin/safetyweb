@@ -57,13 +57,25 @@ async def test_check_payment_without_local_payment_skips_platega_when_credential
     monkeypatch.setattr(main_module, "async_session_maker", lambda: FakeSession())
     monkeypatch.setattr(main_module, "PaymentRepository", FakePaymentRepository)
     monkeypatch.setattr(main_module, "PlategaClient", fail_client)
+    monkeypatch.delenv("PLATEGA_MERCHANT_ID", raising=False)
+    monkeypatch.delenv("PLATEGA_API_KEY", raising=False)
+    monkeypatch.delenv("PLATEGA_CALLBACK_SECRET", raising=False)
+    monkeypatch.delenv("PLATEGA_RETURN_URL", raising=False)
+    monkeypatch.delenv("PLATEGA_FAILED_URL", raising=False)
+    monkeypatch.delenv("PAYMENT_PROVIDER", raising=False)
 
     message = FakeMessage(admin_id=123)
 
     await main_module.check_payment_command(
         message,
         SimpleNamespace(args="tx-1"),
-        _settings(),
+        _settings(
+            platega_merchant_id=None,
+            platega_api_key=None,
+            platega_callback_secret=None,
+            platega_return_url=None,
+            platega_failed_url=None,
+        ),
     )
 
     assert message.answers == [
