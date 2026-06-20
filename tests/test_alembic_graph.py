@@ -26,16 +26,19 @@ def _parse_revision_file(path: Path) -> tuple[str, str]:
 
 def test_alembic_revision_ids_are_unique_by_source() -> None:
     revisions_by_id: dict[str, list[str]] = {}
-    for path in VERSIONS_DIR.glob("*.py"):
+    for path in sorted(VERSIONS_DIR.glob("*.py")):
         revision, _ = _parse_revision_file(path)
         revisions_by_id.setdefault(revision, []).append(str(path))
 
     duplicates = {
         revision: paths
-        for revision, paths in revisions_by_id.items()
+        for revision, paths in sorted(revisions_by_id.items())
         if len(paths) > 1
     }
-    assert duplicates == {}, f"Duplicate Alembic revision ids found: {duplicates}"
+    assert duplicates == {}, (
+        "Duplicate Alembic revision ids found before loading "
+        f"ScriptDirectory: {duplicates}"
+    )
 
 
 def test_alembic_down_revisions_exist_by_source() -> None:
@@ -57,7 +60,7 @@ def test_alembic_has_single_head() -> None:
     config = Config("alembic.ini")
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
-    assert len(heads) == 1, f"Expected single Alembic head, got: {heads}"
+    assert len(heads) == 1, f"Expected single Alembic head, got {len(heads)}: {list(heads)}"
 
 
 def test_alembic_script_revisions_are_unique() -> None:
