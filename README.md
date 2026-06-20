@@ -203,6 +203,7 @@ Standalone-запуск `uvicorn app.http_app:app` не рекомендуетс
 Перед PR с миграциями проверьте граф Alembic:
 
 ```bash
+python scripts/check_alembic_graph.py
 alembic heads
 alembic branches
 alembic history --verbose
@@ -223,6 +224,29 @@ docker compose run --rm bot alembic upgrade head
 ```bash
 alembic upgrade head
 ```
+
+
+## Alembic troubleshooting
+
+Если Docker падает с ошибкой:
+
+```text
+Revision <id> is present more than once
+Multiple head revisions are present
+```
+
+проверьте:
+
+```bash
+grep -R "revision.*<id>" -n alembic/versions
+git status --short alembic/versions
+git clean -fdn alembic/versions
+python scripts/check_alembic_graph.py
+alembic heads
+alembic upgrade head
+```
+
+Важно: `git pull` не удаляет untracked migration files. Если старый migration-файл остался локально, Docker может скопировать его в image и Alembic увидит duplicate revision. Перед удалением всегда смотрите dry-run через `git clean -fdn alembic/versions`; если в списке только stale/untracked миграции, удалите их из рабочей директории командой `git clean -fd alembic/versions`.
 
 ## Ручной MVP-сценарий оплаты
 
