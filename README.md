@@ -1,498 +1,68 @@
-# ЛадНет
+# zapretvless / Arbelin One
 
-ЛадНет — Telegram-бот для оформления индивидуальных подписок на цифровой доступ. Бот показывает тарифы, создаёт MVP-заявку на оплату, уведомляет администраторов и после ручного подтверждения оплаты отправляет пользователю ссылку для защищённого соединения.
+Windows-клиент для управления VLESS и DPI Bypass режимами.
 
-## Стек
+## Status
 
-- Python 3.12
-- aiogram и aiogram-dialog для Telegram-бота
-- SQLAlchemy AsyncIO и asyncpg для работы с PostgreSQL
-- Alembic для миграций базы данных
-- Redis для FSM-хранилища aiogram
-- APScheduler для фоновых задач и уведомлений
-- httpx для интеграции с внешним контуром цифрового доступа
-- Pydantic Settings для конфигурации из окружения
-- Docker Compose для локального запуска инфраструктуры
+PR-01 bootstrap. Реальная VPN/DPI логика ещё не реализована.
 
+## One-command startup
 
-## Меню бота
+На Windows с установленным .NET 8 SDK:
 
-Основное пользовательское меню бота содержит разделы:
-
-- `🛒 Оформить / продлить`
-- `👤 Мой профиль`
-- `🎁 Пригласить друга`
-- `🖥 Индивидуальные серверы`
-- `📲 Инструкция`
-- `💬 Поддержка`
-- `📄 Документы`
-
-
-## Индивидуальные серверы
-
-Раздел `🖥 Индивидуальные серверы` добавляет в главное меню информационно-заявочный сценарий для клиентов, которым нужен отдельный серверный ресурс. В разделе доступны два варианта:
-
-- `👨‍👩‍👧 Семейный доступ` — заявка на отдельный серверный ресурс для дома, семьи и нескольких личных устройств.
-- `🏢 Корпоративным клиентам` — заявка на решение для команды, офиса, сотрудников или нескольких рабочих мест.
-
-После нажатия кнопки заявки бот отправляет уведомление администраторам из `ADMIN_IDS` с данными пользователя и выбранным типом интереса, а пользователю показывает подтверждение, что заявка принята и поддержка свяжется с ним. Раздел не создаёт автоматическую оплату, не создаёт Platega payment, не создаёт подписку и не создаёт клиента во внешнем контуре автоматически.
-
-Цены и доступность раздела управляются через `.env`:
-
-```env
-CUSTOM_SERVERS_ENABLED=true
-FAMILY_SERVER_PRICE_RUB=1490
-BUSINESS_SERVER_20_PRICE_RUB=3990
-BUSINESS_SERVER_40_PRICE_RUB=6990
-ROUTER_SETUP_PRICE_RUB=1500
+```powershell
+.\up.ps1
 ```
 
-При изменении кнопок и пользовательских сценариев необходимо обновить `/ahelp`.
+Команда выполняет restore/build/test, создаёт локальные папки `%LOCALAPPDATA%\ArbelinOne`, проверяет наличие optional engine binaries с warning при отсутствии и запускает WPF UI. Она не запускает VLESS, DPI Bypass, Xray, Zapret или WinDivert и не меняет proxy/DNS/routes.
 
-## Настройка `.env`
+## Safe local check
 
-Скопируйте пример окружения и заполните значения:
-
-```bash
-cp .env.example .env
+```powershell
+.\scripts\dev-check.ps1
 ```
 
-Минимальный набор переменных для локального запуска через Docker Compose:
+Safe check выполняет restore/build/test без запуска UI, Windows Service, Xray, Zapret, WinDivert и без изменения сетевых настроек.
 
-```env
-# Telegram bot token from BotFather.
-BOT_TOKEN=replace-me
+## Docker check
 
-# PostgreSQL connection settings.
-POSTGRES_DB=safetyweb
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=replace-me
-
-# 3x-ui panel connection settings.
-XUI_BASE_URL=https://example.com:31293/webPath
-XUI_PUBLIC_HOST=example.com
-XUI_SUB_BASE_URL=https://example.com/sub/
-XUI_AUTH_MODE=session_cookie
-XUI_USERNAME=replace-me
-XUI_PASSWORD=replace-me
-XUI_INBOUND_IDS=1
-XUI_DEFAULT_TRAFFIC_GB=0
-XUI_DEFAULT_LIMIT_IP=1
-XUI_DEFAULT_MAX_ACTIVE_SUBSCRIPTIONS=50
-NODE_RESERVATION_TTL_MINUTES=30
-XUI_NODES_JSON=
-
-# Comma-separated Telegram user IDs with administrator permissions.
-ADMIN_IDS=123456789,987654321
-
-# Free test mode: users receive digital access links without payment/admin confirmation.
-TEST_MODE=false
-# Dev/debug only: allow referral rewards during TEST_MODE.
-TEST_MODE_REFERRAL_REWARDS_ENABLED=false
-
-# Custom server request section.
-CUSTOM_SERVERS_ENABLED=true
-FAMILY_SERVER_PRICE_RUB=1490
-BUSINESS_SERVER_20_PRICE_RUB=3990
-BUSINESS_SERVER_40_PRICE_RUB=6990
-ROUTER_SETUP_PRICE_RUB=1500
-```
-
-Дополнительно можно переопределить `POSTGRES_HOST`, `POSTGRES_PORT`, `REDIS_URL`, `XUI_EXPIRED_CLIENT_POLICY`, `TEST_MODE` и `TEST_MODE_REFERRAL_REWARDS_ENABLED`. В Docker Compose значения `POSTGRES_HOST`, `POSTGRES_PORT` и `REDIS_URL` для контейнера бота задаются автоматически и указывают на сервисы `postgres` и `redis`.
-
-### Обязательные настройки цифрового доступа
-
-Внешний контур цифрового доступа запускается и администрируется отдельно: compose-файл проекта поднимает только бота, PostgreSQL и Redis. Для интеграции обязательно заполните:
-
-- `XUI_BASE_URL` — базовый URL 3x-ui панели без `/login` или `/panel/api`, например `https://example.com:31293/webPath`.
-- `XUI_PUBLIC_HOST` — публичный домен или IP-адрес, который будет подставляться в ссылку для защищённого соединения, например `example.com`.
-- `XUI_SUB_BASE_URL` — публичный базовый URL подписок, например `https://example.com/sub/`; можно оставить пустым, если он не нужен.
-- `XUI_API_TOKEN` — Bearer-токен для `XUI_AUTH_MODE=api_token`; можно оставить пустым для cookie-сессии.
-- `XUI_AUTH_MODE` — режим аутентификации внешнего контура: `session_cookie` (по умолчанию, вход по логину и паролю) или `api_token` (заголовок `Authorization: Bearer ...`; при пустом `XUI_API_TOKEN` используется cookie-сессия).
-- `XUI_USERNAME` — имя пользователя администратора внешнего контура цифрового доступа.
-- `XUI_PASSWORD` — пароль администратора внешнего контура цифрового доступа.
-- `XUI_INBOUND_IDS` — ID направлений через запятую, в которые бот будет добавлять записи цифрового доступа.
-- `XUI_DEFAULT_TRAFFIC_GB` и `XUI_DEFAULT_LIMIT_IP` — значения по умолчанию для новых клиентов в legacy single-node режиме.
-- `XUI_DEFAULT_MAX_ACTIVE_SUBSCRIPTIONS` — лимит active-подписок для виртуальной legacy-ноды `default`; укажите положительное число или оставьте unset/`null`, чтобы не ограничивать ёмкость.
-- `NODE_RESERVATION_TTL_MINUTES` — время жизни временной резервации ноды в минутах.
-
-
-## 3x-ui authentication
-
-Бот поддерживает три явных режима авторизации панели. По умолчанию оставлен `session_cookie`, чтобы не ломать существующие установки. Если `XUI_API_TOKEN` заполнен, но `XUI_AUTH_MODE=session_cookie`, token не используется.
-
-### Session cookie mode
-
-```env
-XUI_AUTH_MODE=session_cookie
-XUI_USERNAME=admin
-XUI_PASSWORD=...
-XUI_API_TOKEN=
-```
-
-### API token mode
-
-```env
-XUI_AUTH_MODE=api_token
-XUI_API_TOKEN=...
-XUI_USERNAME=admin
-XUI_PASSWORD=...
-```
-
-Даже в api_token mode username/password могут оставаться обязательными для некоторых внутренних операций/валидации, но запросы к panel API должны использовать Bearer token.
-
-### Auto mode
-
-```env
-XUI_AUTH_MODE=auto
-XUI_API_TOKEN=...
-XUI_USERNAME=admin
-XUI_PASSWORD=...
-```
-
-В `auto` бот сначала пробует Bearer token, а при 401/403 безопасно переходит на session cookie.
-
-### Troubleshooting 403
-
-Если диагностика показывает:
-
-```text
-X-UI authentication failed (status=403, response=)
-```
-
-Проверить:
-
-1. `XUI_AUTH_MODE` выбран правильно.
-2. Если используете token — `XUI_AUTH_MODE=api_token`.
-3. Если используете login/password — `XUI_AUTH_MODE=session_cookie`.
-4. `XUI_BASE_URL` указывает на web root панели, без `/login` и без `/panel/api`.
-5. `XUI_INBOUND_IDS` существуют в панели.
-6. У панели доступен API.
-
-Администратор может использовать `/node <node_key>` и `/xui_debug`: команды показывают auth mode, наличие token/username и подсказки без вывода секретов.
-
-## Multi-node режим
-
-По умолчанию бот работает в legacy single-node режиме: используются обычные переменные `XUI_BASE_URL`, `XUI_PUBLIC_HOST`, `XUI_SUB_BASE_URL`, `XUI_API_TOKEN`, `XUI_AUTH_MODE`, `XUI_USERNAME`, `XUI_PASSWORD`, `XUI_INBOUND_IDS`, `XUI_DEFAULT_TRAFFIC_GB`, `XUI_DEFAULT_LIMIT_IP` и `XUI_DEFAULT_MAX_ACTIVE_SUBSCRIPTIONS`. Этот режим подходит для одной 3x-ui-ноды и сохраняет обратную совместимость с существующими `.env`; внутри приложения она отображается как виртуальная нода с ключом `default`.
-
-Для нескольких нод задайте `XUI_NODES_JSON` — JSON-массив объектов нод. Если переменная заполнена, конфигурация нод берётся из неё, а legacy `XUI_*` переменные остаются запасным single-node способом конфигурации. Пример компактного значения:
-
-```env
-XUI_NODES_JSON=[{"key":"main","name":"Primary node","enabled":true,"base_url":"https://node-1.example.com:31293/webPath","public_host":"node-1.example.com","sub_base_url":"https://node-1.example.com/sub/","api_token":"","username":"admin","password":"change-me","inbound_ids":[1,2,3],"default_traffic_gb":0,"default_limit_ip":1,"max_active_subscriptions":50,"weight":1},{"key":"backup","name":"Backup node","enabled":true,"base_url":"https://node-2.example.com:31293/webPath","public_host":"node-2.example.com","sub_base_url":"https://node-2.example.com/sub/","api_token":"","username":"admin","password":"change-me","inbound_ids":[1,2],"default_traffic_gb":0,"default_limit_ip":1,"max_active_subscriptions":25,"weight":2}]
-```
-
-Основные правила работы multi-node режима:
-
-- Объект ноды принимает реально парсимые поля `key`, `name`, `enabled`, `max_active_subscriptions`, `weight`, `base_url`/`xui_base_url`, `public_host`/`xui_public_host`, `sub_base_url`/`xui_sub_base_url`, `api_token`/`xui_api_token`, `auth_mode`/`xui_auth_mode`, `username`/`xui_username`, `password`/`xui_password`, `inbound_ids`/`xui_inbound_ids`, `default_traffic_gb` и `default_limit_ip`.
-- `key` должен быть стабильным уникальным идентификатором ноды. Он сохраняется в подписке как `node_key`, поэтому не переименовывайте ключ у ноды с активными пользователями.
-- Для новой выдачи бот выбирает только `enabled=true` ноды, пропускает ноды с исчерпанным `max_active_subscriptions` и берёт enabled-ноду с минимальным числом active-подписок. Это распределяет новых пользователей по наименее загруженным доступным нодам.
-- После выдачи `node_key` сохраняется вместе с подпиской. Все продления и обновления срока выполняются на той же ноде, чтобы у пользователя не менялась действующая ссылка для защищённого соединения.
-- `enabled=false` исключает ноду из выбора для новых подписок, но не удаляет и не отключает существующие подписки на этой ноде. Продления действующих подписок продолжают обращаться к сохранённой ноде по её `node_key`, если нода всё ещё присутствует в конфигурации.
-- Безопасное удаление ноды: сначала установите для неё `enabled=false`, дождитесь окончания или переноса всех active-подписок с этим `node_key`, проверьте отсутствие активных пользователей на ноде через админ-команды, и только после этого удаляйте объект ноды из `XUI_NODES_JSON`.
-- Администраторы могут использовать `/nodes`, чтобы посмотреть список настроенных нод и их состояние, и `/node <node_key>`, чтобы открыть подробную информацию по конкретной ноде.
-
-
-## Capacity management нод
-
-Capacity management ограничивает выдачу новых подписок по числу реально занятых слотов на 3x-ui нодах. Лимит задаётся через `XUI_DEFAULT_MAX_ACTIVE_SUBSCRIPTIONS` для legacy single-node режима или через поле `max_active_subscriptions` у объекта ноды в `XUI_NODES_JSON`; `NODE_RESERVATION_TTL_MINUTES` определяет срок временной резервации ноды на время оформления заказа.
-
-Правила учёта слотов:
-
-- Слот занимает только подписка со статусом `SubscriptionStatus.ACTIVE`. Подписки в статусах `expired` и `disabled` не считаются занятыми слотами и не уменьшают доступную capacity ноды.
-- При истечении или отключении подписки её `node_key` не обнуляется: связь с нодой сохраняется для аудита, диагностики и возможных ручных операций администратора.
-- Освобождение capacity в базе и физическое освобождение клиента в 3x-ui — разные операции. База перестаёт считать слот занятым после выхода подписки из `ACTIVE`, а фактическое отключение или удаление клиента в панели зависит от `XUI_EXPIRED_CLIENT_POLICY`.
-- Для коммерческого режима рекомендуется `XUI_EXPIRED_CLIENT_POLICY=delete`, чтобы истёкшие клиенты физически удалялись из 3x-ui и не накапливались на нодах. Значение `disable` подходит скорее для отладки или сценариев, где нужно временно сохранять клиента в панели.
-
-Поведение при оплате и выдаче доступа:
-
-- **Preflight перед созданием payment:** бот сначала проверяет наличие свободной enabled-ноды с учётом active-подписок и временных резерваций. Если свободных нод нет, payment не создаётся, пользователь не отправляется на оплату, а администратор получает уведомление о нехватке capacity.
-- **Paid-but-blocked:** если платёж уже стал `paid`, но выдача доступа заблокирована из-за отсутствия capacity или ошибки ноды, payment остаётся в статусе `paid`. Такая ситуация требует ручного вмешательства администратора: нужно освободить/добавить capacity, проверить ноду и повторить выдачу или решить вопрос с пользователем вручную.
-
-## Запуск через Docker Compose
-
-1. Подготовьте `.env` по инструкции выше.
-2. Запустите стек:
-
-```bash
+```powershell
 docker compose up --build
 ```
 
-Compose поднимает сервисы:
+Docker Compose используется только для безопасных проверок. Реальный Windows-клиент, WPF UI, Windows Service, WinDivert, system proxy и сетевые настройки не запускаются из Docker.
 
-- `bot` — приложение Telegram-бота;
-- `postgres` — база данных PostgreSQL;
-- `redis` — хранилище FSM-состояний.
+Полная сборка solution может быть недоступна в Linux-контейнере из-за WPF-проекта. Поэтому Compose проверяет container-friendly части: Shared и xUnit tests.
 
-Сервис `bot` ожидает успешные health checks PostgreSQL и Redis. При старте контейнера автоматически выполняется `alembic upgrade head`, затем запускается production entrypoint `python -m app.main`. Standalone-запуск `uvicorn app.http_app:app` не используется: callback-приложение создаётся в `app.main` через factory `create_app(settings=settings, bot=bot)`, чтобы обработчики callback-ов имели доступ к экземпляру Telegram bot.
+## Engine binaries
 
-Для фонового запуска используйте:
-
-```bash
-docker compose up --build -d
-```
-
-Просмотр логов бота:
-
-```bash
-docker compose logs -f bot
-```
-
-Остановка стека:
-
-```bash
-docker compose down
-```
-
-## Запуск приложения
-
-Production entrypoint приложения — `python -m app.main`. Именно этот способ запуска инициализирует Telegram bot instance, фоновые задачи и, при необходимости, HTTP callback server для платёжных webhook-ов.
-
-HTTP callback server поднимается внутри `app.main` только при `PAYMENT_PROVIDER=platega` и `TEST_MODE=false`. В остальных режимах отдельный HTTP-сервер для callback-ов не запускается.
-
-Standalone-запуск `uvicorn app.http_app:app` не рекомендуется и не поддерживается: webhook app должна иметь доступ к экземпляру Telegram bot, который создаётся в `app.main`, чтобы обработчики могли корректно завершать оплату и отправлять уведомления.
-
-## Alembic-миграции
-
-Миграции находятся в каталоге `alembic/versions`. В штатном Docker Compose-сценарии они применяются автоматически при запуске контейнера `bot`.
-
-Перед PR с миграциями проверьте граф Alembic:
-
-```bash
-python scripts/check_alembic_graph.py
-alembic heads
-alembic branches
-alembic history --verbose
-alembic upgrade head
-pytest tests/test_alembic_graph.py
-```
-
-В проекте должен быть ровно один Alembic head. Нельзя создавать миграции с повторяющимся `revision`. Нельзя чинить multiple heads через `alembic upgrade heads` в Docker entrypoint: штатная команда `alembic upgrade head` должна работать без указания отдельной ветки.
-
-Если нужно применить миграции вручную отдельной командой, выполните:
-
-```bash
-docker compose run --rm bot alembic upgrade head
-```
-
-Для локального запуска без Docker Compose убедитесь, что переменные подключения к PostgreSQL доступны в окружении или `.env`, затем выполните:
-
-```bash
-alembic upgrade head
-```
-
-
-## Alembic troubleshooting
-
-Если Docker падает с ошибкой:
+Optional binaries are expected at:
 
 ```text
-Revision <id> is present more than once
-Multiple head revisions are present
+engines/xray/xray.exe
+engines/zapret/winws.exe
+engines/zapret/winws2.exe
+engines/zapret/WinDivert64.sys
 ```
 
-проверьте:
+Engine binaries are not committed to this repository in PR-01.
 
-```bash
-grep -R "revision.*<id>" -n alembic/versions
-git status --short alembic/versions
-git clean -fdn alembic/versions
-python scripts/check_alembic_graph.py
-alembic heads
-alembic upgrade head
-```
-
-Важно: `git pull` не удаляет untracked migration files. Если старый migration-файл остался локально, Docker может скопировать его в image и Alembic увидит duplicate revision. Перед удалением всегда смотрите dry-run через `git clean -fdn alembic/versions`; если в списке только stale/untracked миграции, удалите их из рабочей директории командой `git clean -fd alembic/versions`.
-
-## Ручной MVP-сценарий оплаты
-
-Текущая MVP-реализация использует ручное подтверждение оплаты администратором:
-
-1. Пользователь запускает бота командой `/start`.
-2. Пользователь нажимает «Оформить / продлить» и выбирает тариф на 1, 3, 6 или 12 месяцев.
-3. Бот создаёт заявку на ручную оплату со статусом `pending` и провайдером `manual`.
-4. Администраторы из `ADMIN_IDS` получают сообщение с данными пользователя, тарифом, суммой и ID платежа.
-5. Администратор проверяет поступление оплаты вне бота и нажимает «Подтвердить оплату».
-6. Бот переводит платёж в статус `paid`, активирует цифровой доступ и отправляет пользователю ссылку для защищённого соединения.
-
-Тарифы для ручного MVP-сценария оплаты:
-
-- 1 месяц — 249 RUB
-- 3 месяца — 649 RUB
-- 6 месяцев — 1190 RUB
-- 12 месяцев — 2190 RUB
-
-## Продление активной подписки
-
-Если у пользователя уже есть активная подписка, кнопка «Оформить / продлить» позволяет продлить подписку: повторная покупка не создаёт отдельный период. Новый оплаченный срок добавляется к текущей дате завершения подписки, а действующая ссылка для защищённого соединения сохраняется и продлевается.
-
-Продление не создаёт новую ссылку. Пользователь выбирает новый срок через “Оформить / продлить”, и если активная подписка уже есть, бот добавляет выбранный срок к текущей дате окончания.
-
-Если активной подписки нет, срок начинается с момента подтверждения оплаты. После успешного оформления бот показывает пользователю дату завершения и отправляет ссылку для защищённого соединения.
-
-## Early-buyer скидка
-
-Первые 100 новых пользователей получают постоянную скидку раннего покупателя при запуске бота командой `/start`.
-
-Скидка привязана к Telegram ID пользователя и действует на все оплаты. Пользователь видит скидку сразу в тарифах: бот показывает базовую цену, процент скидки и итоговую сумму.
-
-TEST_MODE не выдаёт скидку раннего покупателя.
-
-## Реферальная программа
-
-Каждый пользователь может получить персональную пригласительную ссылку через раздел «Реферальная программа». Когда новый пользователь приходит по такой ссылке и впервые оплачивает подписку, бонусные дни могут быть начислены обеим сторонам.
-
-Бонусные дни добавляются только к активной подписке. Для пригласившего пользователя размер бонуса зависит от срока первой оплаченной подписки приглашённого пользователя. Также действует месячный лимит бонусных дней, чтобы начисления оставались предсказуемыми.
-
-## Админские команды
-
-Администраторы определяются списком Telegram ID в переменной `ADMIN_IDS`. Для них доступны служебные действия:
-
-- `/admin` — открыть административное меню.
-- `/ahelp` — показать полный список пользовательских и административных команд, deep-link сценариев и основных кнопок.
-- `/stats` — посмотреть общую статистику по пользователям, подпискам, оплатам, скидкам и реферальной программе.
-- `/nodes` — показать безопасную сводку по настроенным нодам.
-- `/node <node_key>` — показать безопасную диагностику одной ноды.
-- `/xui_debug` — показать безопасную X-UI диагностику авторизации и endpoint для всех нод.
-- `/add_days <telegram_id> <days> [reason]` — вручную добавить бонусные дни к активной подписке пользователя.
-- `/check_payment <provider_payment_id>` — проверить локальный и провайдерский статус платежа, при необходимости догнать финализацию.
-- `/payment <provider_payment_id>` — alias для `/check_payment`.
-- `/user <telegram_id>` — показать карточку пользователя, подписку, trial, скидки, рефералку и последние платежи.
-- `Админ` — текстовая команда для открытия административного меню.
-- `XUI debug` — выполнить диагностическую проверку внешнего контура без создания пользователя.
-- Кнопка «Подтвердить оплату» в уведомлении администратору — подтвердить ручную оплату и выдать пользователю цифровой доступ.
-
-Примечание: при добавлении новой slash-команды, текстовой админ-команды или важной пользовательской команды необходимо обновить `/ahelp` и README.
-
-## Ручная выдача бонусных дней
-
-Команда `/add_days` используется, когда администратору нужно вручную продлить активную подписку пользователя на заданное количество дней. Формат команды:
+## PR plan
 
 ```text
-/add_days <telegram_id> <days> [reason]
+PR-01: Bootstrap
+PR-02: UI skeleton
+PR-03: VLESS parser
+PR-04: Xray config generator
+PR-05: Process supervisor
+PR-06: Xray engine MVP
+PR-07: DPI strategy loader
+PR-08: Zapret engine MVP
+PR-09: Stop All + Repair Network
+PR-10: Optional system proxy
+PR-11: Hybrid experimental
 ```
 
-`telegram_id` — Telegram ID пользователя, `days` — положительное количество дней, `reason` — необязательный комментарий для внутреннего учёта. После успешного выполнения бот продлевает подписку, обновляет срок действия цифрового доступа и отправляет пользователю уведомление с новой датой завершения.
+## Legacy files
 
-Если активная подписка не найдена или обновление цифрового доступа не выполнено, администратор получает сообщение об ошибке.
-
-## Уведомления о завершении подписки
-
-Фоновая задача регулярно проверяет активные подписки и отправляет пользователю напоминания перед завершением срока: за 3 дня, за 1 день и в день завершения. После окончания срока бот фиксирует событие завершения и применяет настроенную политику для цифрового доступа.
-
-Чтобы уведомления не дублировались, каждое событие сохраняется для конкретного периода подписки. После продления подписки новый период получает собственные уведомления.
-
-## Лог ошибок выдачи
-
-Если при выдаче или продлении цифрового доступа возникает ошибка, бот отправляет администраторам отдельное уведомление. В нём указываются тип операции, Telegram ID пользователя, параметры заявки и текст ошибки.
-
-Такие сообщения помогают быстро проверить ручную оплату, состояние подписки и доступность внешнего контура цифрового доступа. Пользователю при этом отправляется нейтральное сообщение о том, что выдача цифрового доступа обрабатывается поддержкой.
-
-
-## Комплаенс для платёжной модерации
-
-- Документы доступны пользователю через меню бота «Документы».
-- Документы содержат ссылки на Политику конфиденциальности, Пользовательское соглашение, Тарифы/условия оплаты.
-- Политика конфиденциальности: https://telegra.ph/Politika-konfidencialnosti-LadNet-06-16
-- Пользовательское соглашение: https://telegra.ph/Polzovatelskoe-soglashenie-LadNet-06-16
-- Тарифы и условия оплаты: https://telegra.ph/Tarify-i-usloviya-oplaty-LadNet-06-16
-- Поддержка доступна через кнопку «Поддержка».
-- Публичные тексты используют нейтральную формулировку `цифровой доступ`.
-- Оплата может работать через ручное подтверждение `ManualPaymentProvider` или провайдер Platega в зависимости от `PAYMENT_PROVIDER`.
-
-
-## Пользовательский тестовый доступ
-
-Пользовательский тестовый доступ — отдельная функция сервиса. Он выдаётся один раз новому пользователю на 2 часа и не считается оплатой.
-
-## Тестовый режим без оплаты
-
-Для проверки регистрации пользователей и выдачи цифрового доступа без оплаты и ручного подтверждения включите переменную окружения:
-
-```env
-TEST_MODE=true
-```
-
-В тестовом режиме пользователь выбирает тариф и нажимает «Получить тестовый доступ». Бот не создаёт заявку на оплату, не уведомляет администраторов и сразу создаёт пользователя/подписку в базе, активирует цифровой доступ и отправляет ссылку для защищённого соединения пользователю. Для возврата к обычному ручному MVP-сценарию установите `TEST_MODE=false` или удалите переменную.
-
-TEST_MODE — это режим разработки. Он позволяет проверить выдачу и продление цифрового доступа без оплаты. Он не создаёт реальные платежи, не выдаёт скидку раннего покупателя и не засчитывается в реферальную программу.
-
-Для отладки реферальных начислений в тестовом режиме можно отдельно включить `TEST_MODE_REFERRAL_REWARDS_ENABLED=true`. Это dev/debug-флаг для проверки логики реферальных бонусов вместе с `TEST_MODE=true`; он не является пользовательским тестовым доступом и не должен включаться в обычном безопасном тестовом режиме.
-
-> **Важно:** TEST_MODE — режим разработки. Он не должен использоваться как пользовательский тестовый период.
-
-
-## Соответствие MVP техническому заданию
-
-- Структура проекта содержит отдельные слои `app/db`, `app/db/repositories`, `app/services`, `app/tasks` и точку входа `app/main.py`.
-- База данных хранит пользователей, подписки, платежи, ноды цифрового доступа и одноразовые события уведомлений о сроке подписки.
-- `XuiClient` работает только через HTTP API внешнего контура цифрового доступа, по умолчанию использует cookie-сессию после `login()`, поддерживает режим `XUI_AUTH_MODE=api_token` с Bearer-токеном и повторяет cookie-запрос после 401/403.
-- Redis используется как FSM storage aiogram; периодические задачи раз в час отправляют напоминания и отключают или удаляют истёкшие подписки.
-- Платёжный слой содержит общий интерфейс провайдера и ручную MVP-реализацию через `ManualPaymentProvider`; новые платёжные интеграции добавляются отдельными реализациями этого интерфейса.
-
-## Платёжные провайдеры
-
-Провайдер оплаты выбирается переменной окружения `PAYMENT_PROVIDER`:
-
-- `PAYMENT_PROVIDER=manual` — ручное подтверждение оплаты через `ManualPaymentProvider`: бот создаёт заявку, администратор проверяет оплату вне бота и подтверждает её вручную.
-- `PAYMENT_PROVIDER=platega` — автоматическое создание платежей через Platega с публичным callback endpoint и последующей проверкой статуса транзакции.
-
-Устаревшие упоминания YooKassa и Robokassa не описывают текущий план интеграции: активными сценариями остаются ручное подтверждение и Platega как отдельный платёжный провайдер.
-
-## Platega
-
-Для включения Platega укажите `PAYMENT_PROVIDER=platega` и заполните параметры окружения:
-
-- `PAYMENT_PROVIDER=platega` — включает провайдер Platega вместо ручного подтверждения.
-- `APP_HTTP_HOST` — адрес, на котором приложение слушает HTTP callback-и; для контейнера обычно `0.0.0.0`.
-- `APP_HTTP_PORT` — порт HTTP-сервера приложения для callback-ов.
-- `PLATEGA_BASE_URL` — базовый URL API Platega.
-- `PLATEGA_MERCHANT_ID` — идентификатор мерчанта Platega.
-- `PLATEGA_API_KEY` — API-ключ для запросов к Platega.
-- `PLATEGA_CALLBACK_SECRET` — секрет для проверки входящих callback-ов; если не задан, используется `PLATEGA_API_KEY`.
-- `PLATEGA_PAYMENT_METHOD` — метод оплаты, передаваемый в транзакцию Platega, если требуется настройками мерчанта.
-- `PLATEGA_RETURN_URL` — URL возврата пользователя после успешного прохождения платёжной страницы.
-- `PLATEGA_FAILED_URL` — URL возврата пользователя после отмены или неуспешной оплаты.
-- `PLATEGA_CALLBACK_PATH` — путь callback endpoint, по умолчанию `/payments/platega/callback`.
-- `PLATEGA_TEST_MODE` — флаг тестового режима на стороне Platega; он не заменяет общий `TEST_MODE`.
-- `PLATEGA_RECONCILE_INTERVAL_SECONDS` — интервал фоновой сверки pending-платежей со статусом Platega.
-- `PLATEGA_WEBHOOK_RETRY_INTERVAL_SECONDS` — интервал повторной обработки сохранённых webhook-событий Platega.
-- `PLATEGA_WEBHOOK_MAX_RETRIES` — максимальное количество повторных попыток обработки webhook-события до перевода в `dead`.
-
-Callback endpoint по адресу `PLATEGA_CALLBACK_PATH` должен быть доступен Platega извне по публичному HTTPS-URL. Локальный или закрытый HTTP endpoint не подходит для production-платежей, потому что webhook-и Platega не смогут подтвердить транзакции. Production HTTP callback server запускается только через `python -m app.main`; не запускайте standalone `uvicorn app.http_app:app`, потому что callback app должен получать Telegram bot instance для обработки webhook-ов и уведомлений.
-
-`TEST_MODE=true` полностью обходит Platega: бот не создаёт реальный платёж, не обращается к API Platega и сразу выдаёт цифровой доступ для разработки. `PLATEGA_TEST_MODE` относится только к настройкам провайдера Platega и не заменяет `TEST_MODE`; при `TEST_MODE=false` платежи всё равно проходят через выбранный `PAYMENT_PROVIDER`.
-
-Доступ выдаётся только после verified webhook/status check: входящий callback сохраняется в таблицу `payment_webhook_events` и обрабатывается после проверки секрета и сверки транзакции со статусом Platega. Возврат пользователя на `pay_return` или `PLATEGA_RETURN_URL` сам по себе не выдаёт доступ и не считается подтверждением оплаты.
-
-Scheduler повторно обрабатывает webhook events в состояниях `pending` и `failed`. После превышения retry limit событие переводится в состояние `dead` и требует ручной проверки администратором через диагностические admin-команды и данные платежа.
-
-Маппинг статусов Platega в локальные статусы платежей:
-
-- `PENDING` -> `pending`;
-- `CONFIRMED` -> `paid`;
-- `CANCELED` -> `failed`;
-- `CHARGEBACKED` -> `refunded` без автоматического отключения уже выданного доступа.
-
-Если pending-платёж просрочен по времени жизни Platega и сверка подтверждает, что он всё ещё не оплачен, локальный статус становится `expired`.
-
-## Диагностика дубликатов активных подписок
-
-Перед добавлением DB-level ограничения на одну активную подписку пользователя проверьте текущие данные и устраните дубликаты. Список всех active subscription можно получить SQL-запросом:
-
-```sql
-select
-    s.id,
-    u.telegram_id,
-    s.status,
-    s.expires_at,
-    s.xui_email,
-    s.created_at
-from subscriptions s
-join users u on u.id = s.user_id
-where s.status = 'active'
-order by u.telegram_id, s.created_at desc;
-```
-
-Пользователи, у которых в результате больше одной строки со статусом `active`, требуют ручной очистки: оставьте актуальную подписку, а остальные переведите в `expired` или `disabled` после проверки ссылки и срока действия.
-
-> **Важно:** миграция `add_unique_active_subscription_per_user` создаёт уникальный индекс для одной активной подписки на пользователя и может завершиться ошибкой, если в базе уже есть дублирующиеся `active` subscriptions. Миграция намеренно не удаляет и не исправляет такие дубли автоматически; очистите их вручную перед применением.
+The old Python Telegram bot code in `app/`, `tests/`, `alembic/`, and related Python configuration remains in the repository but is not used by the PR-01 Arbelin One Windows-client bootstrap. The previous Python Docker files were preserved as `Dockerfile.legacy` and `docker-compose.legacy.yml`.
