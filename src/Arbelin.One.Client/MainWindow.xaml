@@ -1,0 +1,19 @@
+<Window x:Class="Arbelin.One.Client.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Arbelin One" Height="360" Width="520">
+  <Grid Margin="24">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <StackPanel Grid.Row="0" Margin="0,0,0,16">
+      <TextBlock Text="Bootstrap ready" FontSize="24" FontWeight="SemiBold"/>
+      <TextBlock Text="Mode: Stopped" Margin="0,8,0,0"/>
+      <TextBlock Text="Xray: not configured"/>
+      <TextBlock Text="Zapret: not configured"/>
+    </StackPanel>
+    <WrapPanel Grid.Row="1" Margin="0,0,0,16">
+      <Button Content="Start VLESS" Click="OnStubAction" Margin="0,0,8,8" Padding="12,6"/>
+      <Button Content="Start DPI Bypass" Click="OnStubAction" Margin="0,0,8,8" Padding="12,6"/>
+      <Button Content="Start Hybrid" Click="OnStubAction" Margin="0,0,8,8" Padding="12,6"/>
+      <Button Content="Stop All" Click="OnStubAction" Margin="0,0,8,8" Padding="12,6"/>
+    </WrapPanel>
+    <TextBlock Grid.Row="2" Text="Mock log" FontWeight="SemiBold"/>
+    <ListBox Grid.Row="3" x:Name="MockLog" Margin="0,8,0,0"/>
+  </Grid>
+</Window>

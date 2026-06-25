@@ -1,0 +1,5 @@
+{
+  "name": "dpi-generic-basic",
+  "description": "Placeholder DPI strategy for future PRs. Not executed in PR-01.",
+  "enabled": false
+}
