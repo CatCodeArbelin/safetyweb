@@ -5,4 +5,4 @@ services:
     volumes:
       - .:/workspace:ro
     command: >
-      sh -c "cp -R /workspace /tmp/zapretvless && dotnet --info && dotnet restore src/Arbelin.One.Tests/Arbelin.One.Tests.csproj && dotnet test src/Arbelin.One.Tests/Arbelin.One.Tests.csproj --no-restore"
+      sh -c "cp -a /workspace/. /tmp/zapretvless/ && dotnet --info && dotnet restore src/Arbelin.One.Tests/Arbelin.One.Tests.csproj && dotnet test src/Arbelin.One.Tests/Arbelin.One.Tests.csproj --no-restore"
